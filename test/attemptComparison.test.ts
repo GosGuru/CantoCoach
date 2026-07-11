@@ -15,6 +15,7 @@ function attempt(
 	return {
 		id,
 		version: 1,
+		practiceSessionId: "session-1",
 		exerciseId: "closure-mum",
 		localDate: "2026-07-11",
 		createdAt: `2026-07-11T10:00:0${id}.000Z`,
