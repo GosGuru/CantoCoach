@@ -10,14 +10,31 @@ import {
 	Play,
 	Square,
 } from "lucide-react";
-import type { Exercise, VoiceBlock } from "../types/vocal";
+import {
+	resolveExercisePrescription,
+	totalPrescriptionRepetitions,
+} from "../domain/practice/prescription.ts";
+import { evaluateExerciseProgression } from "../domain/progression/evaluateExerciseProgression.ts";
+import { usePracticeSession } from "../hooks/usePracticeSession.ts";
 import { useVocalSynthesizer } from "../hooks/useVocalSynthesizer";
-import { LivePitchPanel } from "./LivePitchPanel";
+import type {
+	AttemptTarget,
+	ExerciseAttemptRecord,
+	ExerciseCompletionMode,
+	ExerciseCompletionRecord,
+} from "../types/attempt.ts";
+import type { Exercise, VoiceBlock } from "../types/vocal";
+import { getLocalDateKey } from "../utils/localDate.ts";
+import { MeasuredAttemptPanel } from "./MeasuredAttemptPanel";
+import { ProgressionSummary } from "./ProgressionSummary";
 
 interface FocusPlayerProps {
 	exercise: Exercise;
 	onClose: () => void;
-	onComplete: (exercise: Exercise) => void;
+	onComplete: (
+		exercise: Exercise,
+		completion: ExerciseCompletionRecord,
+	) => void;
 }
 
 const BLOCK_LABELS: Record<VoiceBlock, string> = {
@@ -36,7 +53,37 @@ const BLOCK_TINT: Record<VoiceBlock, string> = {
 	Repertorio: "from-emerald/8 to-transparent",
 };
 
+const ATTEMPTS_STORAGE_KEY = "vocalgym-attempts-v1";
+
+function readStoredAttempts(): ExerciseAttemptRecord[] {
+	try {
+		const raw = window.localStorage.getItem(ATTEMPTS_STORAGE_KEY);
+		return raw ? (JSON.parse(raw) as ExerciseAttemptRecord[]) : [];
+	} catch {
+		return [];
+	}
+}
+
+function deduplicateAttempts(
+	attempts: ExerciseAttemptRecord[],
+): ExerciseAttemptRecord[] {
+	return [...new Map(attempts.map((attempt) => [attempt.id, attempt])).values()];
+}
+
 export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps) {
+	const prescription = useMemo(
+		() => resolveExercisePrescription(exercise),
+		[exercise],
+	);
+	const {
+		sessionId,
+		session,
+		registerAttempt,
+		completeMeasured,
+		completeManual,
+		closePartial,
+		interruptForDiscomfort,
+	} = usePracticeSession(exercise.id, prescription);
 	const {
 		isPlaying,
 		currentNoteIndex,
@@ -50,9 +97,27 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	const [checkedAutochecks, setCheckedAutochecks] = useState<Set<string>>(
 		new Set(),
 	);
+	const [sessionAttempts, setSessionAttempts] = useState<ExerciseAttemptRecord[]>(
+		[],
+	);
 
 	const noteNames = exercise.scalePattern.noteNames ?? [];
 	const totalNotes = exercise.scalePattern.frequencies.length;
+	const completedRepetitions =
+		session?.completedRepetitions ??
+		sessionAttempts.filter((attempt) => attempt.metrics.evaluable).length;
+	const requiredRepetitions = totalPrescriptionRepetitions(prescription);
+	const prescriptionComplete = completedRepetitions >= requiredRepetitions;
+
+	const allAttempts = useMemo(
+		() => deduplicateAttempts([...readStoredAttempts(), ...sessionAttempts]),
+		[sessionAttempts],
+	);
+	const progression = useMemo(
+		() => evaluateExerciseProgression(exercise, allAttempts),
+		[allAttempts, exercise],
+	);
+
 	const focusInstruction =
 		currentNoteIndex >= 0
 			? currentNoteIndex % Math.max(exercise.instructions.length, 1)
@@ -82,27 +147,67 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	};
 
 	const handlePlayPause = () => {
-		if (isPlaying) {
-			pause();
-		} else if (currentNoteIndex >= 0) {
-			resume();
-		} else {
-			startScale(exercise.scalePattern);
-		}
+		if (isPlaying) pause();
+		else if (currentNoteIndex >= 0) resume();
+		else startScale(exercise.scalePattern);
 	};
+
+	const handlePlayTarget = (target: AttemptTarget) => {
+		stop();
+		startScale({
+			type: "sustained",
+			defaultBpm: 60,
+			frequencies: [target.frequencyHz],
+			noteNames: [target.noteName],
+		});
+	};
+
+	const handleAttemptRecorded = (attempt: ExerciseAttemptRecord) => {
+		registerAttempt(attempt);
+		setSessionAttempts((current) =>
+			current.some((item) => item.id === attempt.id)
+				? current
+				: [...current, attempt],
+		);
+	};
+
+	const createCompletion = (
+		mode: ExerciseCompletionMode,
+	): ExerciseCompletionRecord => ({
+		id: crypto.randomUUID(),
+		version: 1,
+		exerciseId: exercise.id,
+		practiceSessionId: sessionId,
+		localDate: getLocalDateKey(),
+		createdAt: new Date().toISOString(),
+		mode,
+		attemptIds: sessionAttempts.map((attempt) => attempt.id),
+		progressionEligible: mode === "measured" && progression.state === "ready",
+		progressionSnapshot: mode === "measured" ? progression : undefined,
+	});
 
 	const handleClose = () => {
 		stop();
+		closePartial();
 		onClose();
 	};
 
-	const handleComplete = () => {
+	const handleCompleteManual = () => {
 		stop();
-		onComplete(exercise);
+		completeManual();
+		onComplete(exercise, createCompletion("manual-unscored"));
+	};
+
+	const handleCompleteMeasured = () => {
+		if (!prescriptionComplete) return;
+		stop();
+		completeMeasured();
+		onComplete(exercise, createCompletion("measured"));
 	};
 
 	const handleDiscomfort = () => {
 		stop();
+		interruptForDiscomfort();
 		window.localStorage.removeItem("vocalgym-daily-safety-v1");
 		onClose();
 		window.setTimeout(() => window.location.reload(), 0);
@@ -122,7 +227,7 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 					className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-text-muted hover:text-text hover:bg-surface/70 transition-colors"
 				>
 					<ChevronLeft className="w-4 h-4" aria-hidden="true" />
-					Volver
+					Cerrar sesión
 				</button>
 				<div className="text-center px-2 min-w-0">
 					<p className="text-[10px] uppercase tracking-wider text-text-subtle">
@@ -134,7 +239,7 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 				</div>
 				<div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface/70 border border-border text-sm font-medium text-text-muted">
 					<Clock className="w-4 h-4" aria-hidden="true" />
-					{exercise.durationMinutes} min
+					{completedRepetitions}/{requiredRepetitions}
 				</div>
 			</header>
 
@@ -176,11 +281,6 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 								style={{ width: `${progressPercent}%` }}
 							/>
 						</div>
-						<p className="mt-3 text-sm text-text-muted">
-							{currentNoteIndex >= 0
-								? `Nota actual: ${noteNames[currentNoteIndex] ?? currentNoteIndex + 1}`
-								: "Escuchá primero la referencia y después activá el afinador en vivo."}
-						</p>
 					</section>
 
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border space-y-4">
@@ -191,14 +291,17 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 								className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl btn-primary text-base font-semibold"
 							>
 								{isPlaying ? (
-									<><Pause className="w-5 h-5" aria-hidden="true" />Pausar</>
+									<>
+										<Pause className="w-5 h-5" aria-hidden="true" /> Pausar
+									</>
 								) : (
-									<><Play className="w-5 h-5" aria-hidden="true" />{currentNoteIndex >= 0 ? "Continuar" : "Escuchar patrón"}</>
+									<>
+										<Play className="w-5 h-5" aria-hidden="true" /> Escuchar patrón
+									</>
 								)}
 							</button>
 
 							<div className="flex flex-wrap items-center justify-center gap-2">
-								<span className="text-sm text-text-muted mr-1">Tempo:</span>
 								{tempoOptions.map((option) => (
 									<button
 										key={option.label}
@@ -209,19 +312,25 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 												? "bg-accent text-accent-foreground"
 												: "bg-surface text-text-muted border border-border hover:text-text"
 										}`}
-										aria-pressed={currentBpm === option.bpm}
 									>
 										{option.label} ({option.bpm})
 									</button>
 								))}
 							</div>
 						</div>
-						<p className="text-xs text-text-subtle">
-							Los cambios de tempo reprograman el audio y el indicador desde la posición actual.
-						</p>
 					</section>
 
-					<LivePitchPanel referencePlaying={isPlaying} />
+					<MeasuredAttemptPanel
+						exercise={exercise}
+						practiceSessionId={sessionId}
+						prescription={prescription}
+						completedRepetitions={completedRepetitions}
+						referencePlaying={isPlaying}
+						onPlayTarget={handlePlayTarget}
+						onAttemptRecorded={handleAttemptRecorded}
+					/>
+
+					<ProgressionSummary result={progression} />
 
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
 						<h2 className="section-title mb-4">Instrucciones</h2>
@@ -235,10 +344,9 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 											: "bg-surface/40 border-border"
 									}`}
 								>
-									<p className="text-sm sm:text-base text-text leading-relaxed">{instruction}</p>
-									{index === focusInstruction && (
-										<span className="inline-flex mt-2 text-xs font-medium text-accent">Foco actual</span>
-									)}
+									<p className="text-sm sm:text-base text-text leading-relaxed">
+										{instruction}
+									</p>
 								</li>
 							))}
 						</ul>
@@ -250,24 +358,24 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 							<h2 className="section-title">Autoverificación</h2>
 						</div>
 						<p className="text-sm text-text-muted mb-4">
-							Son sensaciones reportadas por vos; no son mediciones anatómicas.
+							Estas sensaciones no sustituyen la medición ni diagnostican su causa.
 						</p>
 						<ul className="space-y-2">
 							{exercise.autochecks.map((item) => {
 								const checked = checkedAutochecks.has(item);
 								return (
 									<li key={item}>
-										<label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer ${checked ? "bg-emerald/8 border-emerald/30" : "bg-surface/40 border-border"}`}>
+										<label className="flex items-start gap-3 p-3 rounded-xl border bg-surface/40 border-border cursor-pointer">
 											<input
 												type="checkbox"
 												checked={checked}
 												onChange={() => toggleAutocheck(item)}
 												className="sr-only"
 											/>
-											<span className={`shrink-0 w-5 h-5 rounded-md border flex items-center justify-center ${checked ? "bg-emerald border-emerald" : "bg-surface border-text-subtle"}`}>
-												{checked && <Check className="w-3.5 h-3.5 text-ink" aria-hidden="true" />}
+											<span className={`w-5 h-5 rounded-md border flex items-center justify-center ${checked ? "bg-emerald border-emerald" : "bg-surface border-text-subtle"}`}>
+												{checked && <Check className="w-3.5 h-3.5 text-ink" />}
 											</span>
-											<span className={`text-sm leading-relaxed ${checked ? "text-emerald" : "text-text-muted"}`}>{item}</span>
+											<span className="text-sm text-text-muted">{item}</span>
 										</label>
 									</li>
 								);
@@ -278,30 +386,38 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 			</main>
 
 			<footer className="relative p-4 sm:p-6 border-t border-border glass-panel">
-				<div className="max-w-2xl mx-auto flex flex-col sm:flex-row items-stretch gap-3">
+				<div className="max-w-2xl mx-auto grid grid-cols-1 sm:grid-cols-4 gap-3">
 					<button
 						type="button"
 						onClick={stop}
-						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary font-medium"
+						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary"
 					>
-						<Square className="w-5 h-5" aria-hidden="true" />
-						Detener audio
+						<Square className="w-5 h-5" /> Detener audio
 					</button>
 					<button
 						type="button"
 						onClick={handleDiscomfort}
-						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-rose/40 bg-rose/10 text-rose font-medium hover:bg-rose/15"
+						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-rose/40 bg-rose/10 text-rose"
 					>
-						<AlertTriangle className="w-5 h-5" aria-hidden="true" />
-						Parar por molestia
+						<AlertTriangle className="w-5 h-5" /> Molestia
 					</button>
 					<button
 						type="button"
-						onClick={handleComplete}
-						className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary font-medium"
+						onClick={handleCompleteManual}
+						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary"
 					>
-						<Check className="w-5 h-5" aria-hidden="true" />
-						Finalizar ejercicio
+						<Check className="w-5 h-5" /> Registrar manual
+					</button>
+					<button
+						type="button"
+						disabled={!prescriptionComplete}
+						onClick={handleCompleteMeasured}
+						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary disabled:opacity-50"
+					>
+						<Check className="w-5 h-5" />
+						{prescriptionComplete
+							? "Completar medido"
+							: `Faltan ${requiredRepetitions - completedRepetitions}`}
 					</button>
 				</div>
 			</footer>

@@ -1,6 +1,6 @@
 # CantoCoach — SDD del MVP técnico
 
-**Versión:** 1.0  
+**Versión:** 1.1  
 **Estado:** fuente de verdad para la implementación  
 **Estrategia:** spec-anchored sobre la aplicación existente  
 **Objetivo:** convertir la guía actual de ejercicios en un entrenador vocal que escucha, mide, corrige y demuestra progreso técnico.
@@ -149,7 +149,7 @@ Marcar manualmente un ejercicio produce `manual-unscored` y no cuenta como evide
 
 ## 8. Pitch y métricas
 
-El detector inicial será YIN o MPM, ejecutado fuera del render principal.
+El detector inicial es YIN. El MVP actual ya permite seleccionar una nota, calibrar el ambiente, ejecutar una cuenta regresiva, capturar un intento y producir métricas locales.
 
 ```ts
 interface PitchFrame {
@@ -163,7 +163,7 @@ interface PitchFrame {
 }
 ```
 
-Métricas del MVP:
+Métricas implementadas para intentos sostenidos:
 
 - mediana del error absoluto en cents;
 - error inicial del ataque;
@@ -172,9 +172,13 @@ Métricas del MVP:
 - dispersión durante tono recto;
 - deriva al final;
 - cobertura de voz confiable;
+- confianza global de medición.
+
+Pendientes para patrones completos:
+
 - error rítmico de onset;
 - continuidad en sirenas y slides;
-- confianza global de medición.
+- comparación de secuencias de varias notas.
 
 No todos los ejercicios usan todas las métricas. El vibrato de repertorio no se evalúa como un tono recto.
 
@@ -193,7 +197,36 @@ Ejemplo:
 
 El feedback no convierte datos acústicos en afirmaciones anatómicas.
 
-## 10. Progresión
+El selector actual prioriza, en este orden:
+
+1. calidad de captura;
+2. ataque;
+3. afinación central;
+4. estabilidad;
+5. final de nota;
+6. confirmación positiva.
+
+## 10. Reintentos
+
+Un intento medido se persiste localmente junto con:
+
+- nota objetivo;
+- trayectoria reducida;
+- métricas;
+- calidad de captura;
+- feedback;
+- referencia al intento anterior.
+
+Al repetir la misma nota dentro del mismo ejercicio, el sistema compara:
+
+- error central;
+- tiempo de estabilización;
+- estabilidad;
+- deriva final.
+
+Una mejora se muestra como diferencia respecto del propio intento anterior, no contra una voz universal ideal.
+
+## 11. Progresión
 
 Macroplan inicial:
 
@@ -209,7 +242,7 @@ Un ejercicio avanza cuando existen varios intentos válidos, confianza suficient
 
 Los días de descanso planificados cuentan como adherencia y no rompen la racha.
 
-## 11. Datos
+## 12. Datos
 
 Entidades principales:
 
@@ -219,17 +252,15 @@ interface PracticeSession {
   localDate: string;
   startedAt: string;
   endedAt?: string;
-  safetyCheck: SafetyCheck;
   attemptIds: string[];
-  status: "completed" | "partial" | "blocked";
+  status: "active" | "partial" | "completed" | "interrupted";
 }
 
 interface ExerciseAttempt {
   id: string;
-  sessionId: string;
+  practiceSessionId?: string;
   exerciseId: string;
-  exerciseVersion: number;
-  startedAt: string;
+  createdAt: string;
   durationMs: number;
   measurementConfidence: number;
   completionMode: "measured" | "manual-unscored";
@@ -242,11 +273,12 @@ Reglas:
 - las fechas de dominio son locales, no UTC;
 - `America/Montevideo` es la zona inicial;
 - racha y minutos se derivan de sesiones;
-- intentos y audio opcional se guardan en IndexedDB;
+- los intentos guardan métricas y trayectoria reducida;
+- el audio completo no se conserva por defecto;
 - todos los esquemas, ejercicios y protocolos tienen versión;
-- se ofrece exportación JSON.
+- se ofrecerá exportación JSON.
 
-## 12. Arquitectura
+## 13. Arquitectura
 
 ```text
 src/
@@ -276,7 +308,7 @@ src/
 
 React coordina UI. La detección de pitch, seguridad, scoring y progresión no viven dentro de componentes.
 
-## 13. Uso de AREH
+## 14. Uso de AREH
 
 AREH se utiliza como inspiración pedagógica:
 
@@ -288,13 +320,13 @@ AREH se utiliza como inspiración pedagógica:
 
 Los cues se redactan de forma propia y se etiquetan como acción, sensación, metáfora o anatomía. “Máscara”, “twang”, “embudo” o “laringe baja” se presentan como herramientas pedagógicas, no como hechos diagnosticados por el micrófono.
 
-## 14. Milestones
+## 15. Milestones
 
 ### M0 — Saneamiento
 
 - documentación SDD;
 - README real;
-- CI, lint, typecheck y build;
+- CI, lint, test, typecheck y build;
 - fechas locales;
 - racha y minutos derivados;
 - migraciones;
@@ -311,19 +343,21 @@ Los cues se redactan de forma propia y se etiquetan como acción, sensación, me
 
 ### M2 — Motor de audio
 
-- `AudioSession`;
 - BPM por ejercicio;
 - resincronización;
-- renderers reales;
+- renderers por patrón;
 - series, repeticiones y descansos;
-- call-and-response.
+- call-and-response automático;
+- unificación futura bajo `AudioSession`.
 
 ### M3 — Micrófono y pitch
 
 - permisos y calibración;
-- YIN/MPM;
+- YIN;
 - confianza y cents;
-- rechazo de ruido y errores de octava;
+- rechazo de ruido y señal débil;
+- afinador en vivo;
+- intento medido;
 - pruebas en Chrome y Safari iPhone.
 
 ### M4 — Métricas y feedback
@@ -333,9 +367,9 @@ Los cues se redactan de forma propia y se etiquetan como acción, sensación, me
 - afinación;
 - estabilidad;
 - final;
-- ritmo;
-- continuidad;
-- reintentos y feedback priorizado.
+- selector de problema principal;
+- plantillas de feedback;
+- reintentos comparativos.
 
 ### M5 — Línea base y adaptación
 
@@ -361,7 +395,7 @@ Los cues se redactan de forma propia y se etiquetan como acción, sensación, me
 - revisión pedagógica;
 - pruebas reales y ajuste de umbrales.
 
-## 15. Criterios críticos
+## 16. Criterios críticos
 
 ```gherkin
 Dado que el usuario marca dolor al cantar
@@ -379,7 +413,14 @@ Entonces se guarda el día local correcto
 ```gherkin
 Dado que no hay voz confiable
 Cuando termina el intento
-Entonces no se genera puntaje
+Entonces no se genera un puntaje técnico
+```
+
+```gherkin
+Dado un segundo intento sobre la misma nota
+Cuando finaliza con métricas válidas
+Entonces se compara contra el intento anterior
+Y se muestra qué mejoró o empeoró
 ```
 
 ```gherkin
@@ -388,6 +429,6 @@ Cuando se evalúa el siguiente nivel
 Entonces no cuenta como evidencia técnica
 ```
 
-## 16. Definition of Done
+## 17. Definition of Done
 
-El MVP está terminado cuando seguridad, fechas, progreso, patrones de audio, calibración, detección, métricas, feedback, progresión, línea base, repertorio y reevaluación funcionan en Chrome de escritorio y Safari móvil; lint, typecheck y build pasan; y ningún texto presenta la app como diagnóstico o terapia.
+El MVP está terminado cuando seguridad, fechas, progreso, patrones de audio, calibración, detección, métricas, feedback, progresión, línea base, repertorio y reevaluación funcionan en Chrome de escritorio y Safari móvil; lint, tests, typecheck y build pasan; y ningún texto presenta la app como diagnóstico o terapia.

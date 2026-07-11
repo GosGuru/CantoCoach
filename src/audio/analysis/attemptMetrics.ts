@@ -2,7 +2,7 @@ import {
 	centsBetween,
 	median,
 	medianAbsoluteDeviation,
-} from "../pitch/pitchMath";
+} from "../pitch/pitchMath.ts";
 
 export interface PitchObservation {
 	timestampMs: number;

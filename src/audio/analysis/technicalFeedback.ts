@@ -1,4 +1,4 @@
-import type { PitchAttemptMetrics } from "./attemptMetrics";
+import type { PitchAttemptMetrics } from "./attemptMetrics.ts";
 
 export type TechnicalFeedbackFocus =
 	| "capture"
