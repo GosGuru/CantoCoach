@@ -35,6 +35,7 @@ interface UseMeasuredAttemptReturn {
 	status: MeasuredAttemptStatus;
 	countdown: number | null;
 	progress: number;
+	hasVoiceStarted: boolean;
 	reading: LiveAttemptReading | null;
 	result: ExerciseAttemptRecord | null;
 	errorMessage: string | null;
@@ -46,8 +47,9 @@ interface UseMeasuredAttemptReturn {
 
 const FFT_SIZE = 4096;
 const ANALYSIS_INTERVAL_MS = 45;
-const CALIBRATION_DURATION_MS = 900;
-const COUNTDOWN_SECONDS = 3;
+const CALIBRATION_DURATION_MS = 1100;
+const COUNTDOWN_SECONDS = 2;
+const MAX_VOICE_START_WAIT_MS = 3500;
 
 function calculateRms(buffer: Float32Array): number {
 	if (buffer.length === 0) return 0;
@@ -66,11 +68,12 @@ function isClipped(buffer: Float32Array): boolean {
 export function useMeasuredAttempt(
 	exerciseId: string,
 	practiceSessionId: string,
-	durationMs = 3200,
+	durationMs = 6000,
 ): UseMeasuredAttemptReturn {
 	const [status, setStatus] = useState<MeasuredAttemptStatus>("idle");
 	const [countdown, setCountdown] = useState<number | null>(null);
 	const [progress, setProgress] = useState(0);
+	const [hasVoiceStarted, setHasVoiceStarted] = useState(false);
 	const [reading, setReading] = useState<LiveAttemptReading | null>(null);
 	const [result, setResult] = useState<ExerciseAttemptRecord | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -135,6 +138,7 @@ export function useMeasuredAttempt(
 		releaseResources();
 		setCountdown(null);
 		setProgress(0);
+		setHasVoiceStarted(false);
 		setReading(null);
 		setErrorMessage(null);
 		updateStatus("idle");
@@ -155,6 +159,7 @@ export function useMeasuredAttempt(
 			setResult(null);
 			setReading(null);
 			setProgress(0);
+			setHasVoiceStarted(false);
 			setCountdown(null);
 			setErrorMessage(null);
 			updateStatus("requesting");
@@ -197,7 +202,8 @@ export function useMeasuredAttempt(
 				const calibrationSamples: number[] = [];
 				const observations: PitchObservation[] = [];
 				let noiseFloorRms = 0.006;
-				let recordingStartedAt = 0;
+				let recordingWindowOpenedAt = 0;
+				let voiceStartedAt: number | null = null;
 				let totalFrames = 0;
 				let clippedFrames = 0;
 
@@ -206,6 +212,9 @@ export function useMeasuredAttempt(
 					updateStatus("analyzing");
 					const metrics = analyzePitchAttempt(observations, target.frequencyHz);
 					const feedback = buildTechnicalFeedback(metrics);
+					const actualDurationMs = voiceStartedAt
+						? Math.min(durationMs, performance.now() - voiceStartedAt)
+						: 0;
 					const record: ExerciseAttemptRecord = {
 						id: crypto.randomUUID(),
 						version: 1,
@@ -213,7 +222,7 @@ export function useMeasuredAttempt(
 						exerciseId,
 						localDate: getLocalDateKey(),
 						createdAt: new Date().toISOString(),
-						durationMs,
+						durationMs: actualDurationMs,
 						target,
 						observations,
 						metrics,
@@ -230,7 +239,7 @@ export function useMeasuredAttempt(
 					};
 
 					releaseResources();
-					setProgress(1);
+					setProgress(voiceStartedAt ? 1 : 0);
 					setCountdown(null);
 					setReading(null);
 					setResult(record);
@@ -241,8 +250,10 @@ export function useMeasuredAttempt(
 					if (runTokenRef.current !== token) return;
 					setCountdown(null);
 					setProgress(0);
+					setHasVoiceStarted(false);
 					setReading(null);
-					recordingStartedAt = performance.now();
+					recordingWindowOpenedAt = performance.now();
+					voiceStartedAt = null;
 					updateStatus("recording");
 				};
 
@@ -285,16 +296,31 @@ export function useMeasuredAttempt(
 					}
 					if (statusRef.current !== "recording") return;
 
-					const timestampMs = performance.now() - recordingStartedAt;
-					totalFrames += 1;
-					if (isClipped(samples)) clippedFrames += 1;
+					const now = performance.now();
 					const detection = detectPitchYin(samples, context.sampleRate, {
 						minFrequencyHz: 70,
 						maxFrequencyHz: 800,
-						minConfidence: 0.7,
-						minRms: Math.max(0.006, noiseFloorRms * 2.4),
+						minConfidence: 0.68,
+						minRms: Math.max(0.0045, noiseFloorRms * 1.9),
 					});
 
+					if (voiceStartedAt === null) {
+						if (detection) {
+							voiceStartedAt = now;
+							setHasVoiceStarted(true);
+						} else if (now - recordingWindowOpenedAt >= MAX_VOICE_START_WAIT_MS) {
+							finalize();
+							return;
+						} else {
+							setProgress(0);
+							setReading(null);
+							return;
+						}
+					}
+
+					const timestampMs = now - voiceStartedAt;
+					totalFrames += 1;
+					if (isClipped(samples)) clippedFrames += 1;
 					observations.push({
 						timestampMs,
 						frequencyHz: detection?.frequencyHz ?? null,
@@ -348,6 +374,7 @@ export function useMeasuredAttempt(
 		status,
 		countdown,
 		progress,
+		hasVoiceStarted,
 		reading,
 		result,
 		errorMessage,
