@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { Exercise, VoiceBlock } from "../types/vocal";
 import { useVocalSynthesizer } from "../hooks/useVocalSynthesizer";
+import { LivePitchPanel } from "./LivePitchPanel";
 
 interface FocusPlayerProps {
 	exercise: Exercise;
@@ -178,7 +179,7 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 						<p className="mt-3 text-sm text-text-muted">
 							{currentNoteIndex >= 0
 								? `Nota actual: ${noteNames[currentNoteIndex] ?? currentNoteIndex + 1}`
-								: "Escuchá primero la referencia. La captura vocal se añadirá en el siguiente módulo."}
+								: "Escuchá primero la referencia y después activá el afinador en vivo."}
 						</p>
 					</section>
 
@@ -219,6 +220,8 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 							Los cambios de tempo reprograman el audio y el indicador desde la posición actual.
 						</p>
 					</section>
+
+					<LivePitchPanel referencePlaying={isPlaying} />
 
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
 						<h2 className="section-title mb-4">Instrucciones</h2>
