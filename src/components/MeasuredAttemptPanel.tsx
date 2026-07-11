@@ -13,8 +13,8 @@ import {
 import { compareAttempts } from "../domain/attempts/compareAttempts.ts";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useMeasuredAttempt } from "../hooks/useMeasuredAttempt.ts";
-import type { Exercise } from "../types/vocal";
 import type { AttemptTarget, ExerciseAttemptRecord } from "../types/attempt.ts";
+import type { Exercise } from "../types/vocal";
 
 interface MeasuredAttemptPanelProps {
 	exercise: Exercise;
@@ -27,7 +27,8 @@ const ATTEMPTS_STORAGE_KEY = "vocalgym-attempts-v1";
 function uniqueTargets(exercise: Exercise): AttemptTarget[] {
 	const targets = new Map<string, AttemptTarget>();
 	exercise.scalePattern.frequencies.forEach((frequencyHz, index) => {
-		const noteName = exercise.scalePattern.noteNames?.[index] ?? `${frequencyHz.toFixed(1)} Hz`;
+		const noteName =
+			exercise.scalePattern.noteNames?.[index] ?? `${frequencyHz.toFixed(1)} Hz`;
 		const key = frequencyHz.toFixed(2);
 		if (!targets.has(key)) targets.set(key, { frequencyHz, noteName });
 	});
@@ -40,12 +41,14 @@ function formatSigned(value: number | null, unit: string): string {
 	return `${rounded > 0 ? "+" : ""}${rounded} ${unit}`;
 }
 
-function metricValue(value: number | null, unit: string): string {
+function formatMetric(value: number | null, unit: string): string {
 	return value === null ? "—" : `${Math.round(value)} ${unit}`;
 }
 
-function isAttemptActive(status: ReturnType<typeof useMeasuredAttempt>["status"]): boolean {
-	return ["requesting", "calibrating", "countdown", "recording", "analyzing"].includes(status);
+function isActiveStatus(status: ReturnType<typeof useMeasuredAttempt>["status"]): boolean {
+	return ["requesting", "calibrating", "countdown", "recording", "analyzing"].includes(
+		status,
+	);
 }
 
 export function MeasuredAttemptPanel({
@@ -75,6 +78,8 @@ export function MeasuredAttemptPanel({
 	} = useMeasuredAttempt(exercise.id);
 
 	const target = targets[selectedIndex] ?? targets[0];
+	const active = isActiveStatus(status);
+
 	const previousAttempt = useMemo(() => {
 		if (!target) return null;
 		return (
@@ -98,37 +103,34 @@ export function MeasuredAttemptPanel({
 
 	useEffect(() => {
 		if (!result) return;
-		setAttempts((current) => {
-			if (current.some((attempt) => attempt.id === result.id)) return current;
-			return [...current, result];
-		});
+		setAttempts((current) =>
+			current.some((attempt) => attempt.id === result.id)
+				? current
+				: [...current, result],
+		);
 	}, [result, setAttempts]);
 
 	useEffect(() => {
-		if (referencePlaying && isAttemptActive(status)) cancel();
-	}, [cancel, referencePlaying, status]);
+		if (referencePlaying && active) cancel();
+	}, [active, cancel, referencePlaying]);
 
 	useEffect(() => {
 		reset();
 		setSelectedIndex(Math.floor(Math.max(0, targets.length - 1) / 2));
-	}, [exercise.id]);
+	}, [exercise.id, reset, targets.length]);
 
 	if (!target) {
 		return (
 			<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
-				<p className="text-sm text-text-muted">Este ejercicio no contiene notas medibles.</p>
+				<p className="text-sm text-text-muted">
+					Este ejercicio no contiene notas medibles.
+				</p>
 			</section>
 		);
 	}
 
-	const active = isAttemptActive(status);
-	const canStart = isSupported && !referencePlaying && !active;
-
-	const beginAttempt = () => {
-		void start({
-			target,
-			previousAttemptId: previousAttempt?.id,
-		});
+	const startAttempt = () => {
+		void start({ target, previousAttemptId: previousAttempt?.id });
 	};
 
 	const retryAttempt = () => {
@@ -141,19 +143,19 @@ export function MeasuredAttemptPanel({
 
 	return (
 		<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
-			<div className="flex items-start gap-3">
+			<header className="flex items-start gap-3">
 				<div className="w-10 h-10 rounded-xl bg-emerald/15 flex items-center justify-center shrink-0">
 					<Target className="w-5 h-5 text-emerald" aria-hidden="true" />
 				</div>
 				<div>
 					<h2 className="section-title">Intento medido</h2>
 					<p className="text-sm text-text-muted mt-1 leading-relaxed">
-						Escuchá una nota, mantené silencio durante la calibración y cantala de forma
-						recta hasta que termine la barra. La app no guarda el audio; conserva la
-						trayectoria reducida y las métricas.
+						Escuchá una nota, mantené silencio durante la calibración y cantala recta
+						hasta que termine la barra. Se guardan métricas y trayectoria reducida, no
+						el audio.
 					</p>
 				</div>
-			</div>
+			</header>
 
 			<div className="mt-5">
 				<p className="text-xs uppercase tracking-wider text-text-subtle mb-2">
@@ -164,17 +166,16 @@ export function MeasuredAttemptPanel({
 						<button
 							key={`${item.frequencyHz}-${item.noteName}`}
 							type="button"
+							disabled={active}
 							onClick={() => {
-								if (active) return;
 								reset();
 								setSelectedIndex(index);
 							}}
-							disabled={active}
-							className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+							className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 ${
 								index === selectedIndex
 									? "border-accent bg-accent/10 text-text"
 									: "border-border bg-surface text-text-muted hover:text-text"
-							} disabled:opacity-50`}
+							}`}
 						>
 							{item.noteName}
 						</button>
@@ -185,8 +186,8 @@ export function MeasuredAttemptPanel({
 			<div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
 				<button
 					type="button"
-					onClick={() => onPlayTarget(target)}
 					disabled={active || referencePlaying}
+					onClick={() => onPlayTarget(target)}
 					className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary disabled:opacity-50"
 				>
 					<Play className="w-4 h-4" aria-hidden="true" />
@@ -194,8 +195,11 @@ export function MeasuredAttemptPanel({
 				</button>
 				<button
 					type="button"
-					onClick={active ? cancel : beginAttempt}
-					disabled={!isSupported || referencePlaying || status === "analyzing"}
+					disabled={
+					status === "analyzing" ||
+					(!active && (!isSupported || referencePlaying))
+				}
+					onClick={active ? cancel : startAttempt}
 					className={`inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium disabled:opacity-50 ${
 						active
 							? "border border-rose/40 bg-rose/10 text-rose"
@@ -203,77 +207,131 @@ export function MeasuredAttemptPanel({
 					}`}
 				>
 					{active ? (
-						<><Square className="w-4 h-4" aria-hidden="true" />Cancelar intento</>
+						<>
+							<Square className="w-4 h-4" aria-hidden="true" />
+							Cancelar intento
+						</>
 					) : (
-						<><Mic2 className="w-4 h-4" aria-hidden="true" />Grabar intento</>
+						<>
+							<Mic2 className="w-4 h-4" aria-hidden="true" />
+							Grabar intento
+						</>
 					)}
 				</button>
 			</div>
 
 			{!isSupported && (
-				<p className="mt-4 text-sm text-rose">El navegador no ofrece una captura compatible.</p>
+				<p className="mt-4 text-sm text-rose">
+					El navegador no ofrece una captura compatible.
+				</p>
 			)}
 			{errorMessage && <p className="mt-4 text-sm text-rose">{errorMessage}</p>}
 
 			<div className="mt-5 rounded-xl border border-border bg-surface/60 min-h-40 flex items-center justify-center p-5">
 				{status === "idle" && (
 					<div className="text-center">
-						<Headphones className="w-7 h-7 text-text-subtle mx-auto" aria-hidden="true" />
-						<p className="text-sm text-text-muted mt-2">Usá auriculares y dejá un segundo de silencio al comenzar.</p>
+						<Headphones
+							className="w-7 h-7 text-text-subtle mx-auto"
+							aria-hidden="true"
+						/>
+						<p className="text-sm text-text-muted mt-2">
+							Usá auriculares y dejá un segundo de silencio al comenzar.
+						</p>
 						{previousAttempt && (
-							<p className="text-xs text-text-subtle mt-2">Ya existe un intento previo para comparar.</p>
+							<p className="text-xs text-text-subtle mt-2">
+								Ya existe un intento comparable.
+							</p>
 						)}
 					</div>
 				)}
-
-				{status === "requesting" && <p className="text-sm text-text-muted">Solicitando el micrófono…</p>}
+				{status === "requesting" && (
+					<p className="text-sm text-text-muted">Solicitando el micrófono…</p>
+				)}
 				{status === "calibrating" && (
 					<div className="text-center">
-						<BarChart3 className="w-7 h-7 text-sky mx-auto animate-pulse" aria-hidden="true" />
-						<p className="text-sm font-semibold text-text mt-2">Calibrando el ambiente</p>
+						<BarChart3
+							className="w-7 h-7 text-sky mx-auto animate-pulse"
+							aria-hidden="true"
+						/>
+						<p className="text-sm font-semibold text-text mt-2">
+							Calibrando el ambiente
+						</p>
 						<p className="text-xs text-text-muted mt-1">Mantené silencio.</p>
 					</div>
 				)}
 				{status === "countdown" && (
 					<div className="text-center">
-						<p className="text-6xl font-bold font-display text-accent">{countdown}</p>
+						<p className="text-6xl font-bold font-display text-accent">
+							{countdown}
+						</p>
 						<p className="text-sm text-text-muted mt-2">Prepará {target.noteName}</p>
 					</div>
 				)}
 				{status === "recording" && (
 					<div className="w-full text-center">
-						<p className="text-xs uppercase tracking-wider text-rose font-semibold">Grabando métricas</p>
+						<p className="text-xs uppercase tracking-wider text-rose font-semibold">
+							Grabando métricas
+						</p>
 						{reading ? (
 							<>
-								<p className="text-4xl font-bold font-display text-text mt-2">{reading.noteName}</p>
-								<p className="text-sm text-text-muted mt-1">{reading.frequencyHz.toFixed(1)} Hz · confianza {Math.round(reading.confidence * 100)}%</p>
+								<p className="text-4xl font-bold font-display text-text mt-2">
+									{reading.noteName}
+								</p>
+								<p className="text-sm text-text-muted mt-1">
+									{reading.frequencyHz.toFixed(1)} Hz · confianza{" "}
+									{Math.round(reading.confidence * 100)}%
+								</p>
 							</>
 						) : (
-							<p className="text-sm text-text-muted mt-4">Esperando una nota confiable…</p>
+							<p className="text-sm text-text-muted mt-4">
+								Esperando una nota confiable…
+							</p>
 						)}
 						<div className="mt-5 h-2 bg-canvas rounded-full overflow-hidden border border-border">
-							<div className="h-full bg-gradient-to-r from-accent to-emerald transition-[width] duration-75" style={{ width: `${Math.round(progress * 100)}%` }} />
+							<div
+								className="h-full bg-gradient-to-r from-accent to-emerald transition-[width] duration-75"
+								style={{ width: `${Math.round(progress * 100)}%` }}
+							/>
 						</div>
 					</div>
 				)}
-				{status === "analyzing" && <p className="text-sm text-text-muted">Calculando ataque, afinación y estabilidad…</p>}
+				{status === "analyzing" && (
+					<p className="text-sm text-text-muted">
+						Calculando ataque, afinación y estabilidad…
+					</p>
+				)}
 				{status === "error" && (
 					<div className="text-center">
 						<AlertTriangle className="w-7 h-7 text-rose mx-auto" aria-hidden="true" />
-						<p className="text-sm text-rose mt-2">No se pudo completar el intento.</p>
+						<p className="text-sm text-rose mt-2">
+							No se pudo completar el intento.
+						</p>
 					</div>
 				)}
 				{status === "complete" && result && (
 					<div className="w-full">
 						<div className="flex items-center gap-2">
-							<CheckCircle2 className={`w-5 h-5 ${result.metrics.evaluable ? "text-emerald" : "text-gold"}`} aria-hidden="true" />
-							<p className="font-semibold text-text">{result.feedback.observation}</p>
+							<CheckCircle2
+								className={`w-5 h-5 ${
+									result.metrics.evaluable ? "text-emerald" : "text-gold"
+								}`}
+								aria-hidden="true"
+							/>
+							<p className="font-semibold text-text">
+								{result.feedback.observation}
+							</p>
 						</div>
-						<p className="text-sm text-text-muted mt-2 leading-relaxed">{result.feedback.evidence}</p>
+						<p className="text-sm text-text-muted mt-2 leading-relaxed">
+							{result.feedback.evidence}
+						</p>
 						<div className="mt-4 rounded-xl border border-accent/25 bg-accent/8 p-4">
-							<p className="text-xs uppercase tracking-wider text-accent font-semibold">Próxima acción</p>
+							<p className="text-xs uppercase tracking-wider text-accent font-semibold">
+								Próxima acción
+							</p>
 							<p className="text-sm text-text mt-1">{result.feedback.action}</p>
-							<p className="text-xs text-text-muted mt-2">Objetivo: {result.feedback.nextTarget}</p>
+							<p className="text-xs text-text-muted mt-2">
+								Objetivo: {result.feedback.nextTarget}
+							</p>
 						</div>
 					</div>
 				)}
@@ -282,24 +340,63 @@ export function MeasuredAttemptPanel({
 			{result && (
 				<>
 					<div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-2">
-						<div className="rounded-lg bg-surface border border-border p-3"><p className="text-[10px] uppercase text-text-subtle">Entrada</p><p className="text-sm font-semibold mt-1">{formatSigned(result.metrics.initialErrorCents, "cents")}</p></div>
-						<div className="rounded-lg bg-surface border border-border p-3"><p className="text-[10px] uppercase text-text-subtle">Estabilización</p><p className="text-sm font-semibold mt-1">{metricValue(result.metrics.stabilizationTimeMs, "ms")}</p></div>
-						<div className="rounded-lg bg-surface border border-border p-3"><p className="text-[10px] uppercase text-text-subtle">Error central</p><p className="text-sm font-semibold mt-1">{metricValue(result.metrics.medianAbsolutePitchErrorCents, "cents")}</p></div>
-						<div className="rounded-lg bg-surface border border-border p-3"><p className="text-[10px] uppercase text-text-subtle">Estabilidad</p><p className="text-sm font-semibold mt-1">{metricValue(result.metrics.pitchStabilityMadCents, "cents")}</p></div>
+						<div className="rounded-lg bg-surface border border-border p-3">
+							<p className="text-[10px] uppercase text-text-subtle">Entrada</p>
+							<p className="text-sm font-semibold mt-1">
+								{formatSigned(result.metrics.initialErrorCents, "cents")}
+							</p>
+						</div>
+						<div className="rounded-lg bg-surface border border-border p-3">
+							<p className="text-[10px] uppercase text-text-subtle">Estabilización</p>
+							<p className="text-sm font-semibold mt-1">
+								{formatMetric(result.metrics.stabilizationTimeMs, "ms")}
+							</p>
+						</div>
+						<div className="rounded-lg bg-surface border border-border p-3">
+							<p className="text-[10px] uppercase text-text-subtle">Error central</p>
+							<p className="text-sm font-semibold mt-1">
+								{formatMetric(
+									result.metrics.medianAbsolutePitchErrorCents,
+									"cents",
+								)}
+							</p>
+						</div>
+						<div className="rounded-lg bg-surface border border-border p-3">
+							<p className="text-[10px] uppercase text-text-subtle">Estabilidad</p>
+							<p className="text-sm font-semibold mt-1">
+								{formatMetric(result.metrics.pitchStabilityMadCents, "cents")}
+							</p>
+						</div>
 					</div>
 
 					{comparison && (
-						<div className={`mt-4 rounded-xl border p-4 ${comparison.improvedMetricCount > comparison.regressedMetricCount ? "border-emerald/30 bg-emerald/8" : "border-border bg-surface/60"}`}>
+						<div
+							className={`mt-4 rounded-xl border p-4 ${
+								comparison.improvedMetricCount > comparison.regressedMetricCount
+									? "border-emerald/30 bg-emerald/8"
+									: "border-border bg-surface/60"
+							}`}
+						>
 							<p className="text-sm font-semibold text-text">{comparison.summary}</p>
 							<div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-text-muted">
-								<span>Afinación: {formatSigned(comparison.pitchErrorDeltaCents, "cents")}</span>
-								<span>Entrada: {formatSigned(comparison.stabilizationDeltaMs, "ms")}</span>
-								<span>Estabilidad: {formatSigned(comparison.stabilityDeltaCents, "cents")}</span>
+								<span>
+									Afinación: {formatSigned(comparison.pitchErrorDeltaCents, "cents")}
+								</span>
+								<span>
+									Entrada: {formatSigned(comparison.stabilizationDeltaMs, "ms")}
+								</span>
+								<span>
+									Estabilidad: {formatSigned(comparison.stabilityDeltaCents, "cents")}
+								</span>
 							</div>
 						</div>
 					)}
 
-					<button type="button" onClick={retryAttempt} className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary">
+					<button
+						type="button"
+						onClick={retryAttempt}
+						className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary"
+					>
 						<RefreshCw className="w-4 h-4" aria-hidden="true" />
 						Reintentar con la corrección
 					</button>
@@ -307,7 +404,8 @@ export function MeasuredAttemptPanel({
 			)}
 
 			<p className="mt-4 text-xs text-text-subtle">
-				La app mide señal acústica. No determina apoyo, registro, tensión muscular ni estado anatómico.
+				La app mide señal acústica. No determina apoyo, registro, tensión muscular ni
+				estado anatómico.
 			</p>
 		</section>
 	);
