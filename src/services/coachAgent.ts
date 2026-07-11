@@ -38,10 +38,12 @@ function levelCap(level: VocalProfile["level"]): number {
 	}
 }
 
-function getCompletedIds(recentSessions?: SessionRecord[]): Set<string> {
+function getProgressionEligibleIds(
+	recentSessions?: SessionRecord[],
+): Set<string> {
 	const ids = new Set<string>();
 	for (const session of recentSessions ?? []) {
-		for (const id of session.completedExerciseIds) ids.add(id);
+		for (const id of session.progressionEligibleExerciseIds ?? []) ids.add(id);
 	}
 	return ids;
 }
@@ -51,8 +53,8 @@ function prerequisitesCovered(
 	recentSessions?: SessionRecord[],
 ): boolean {
 	if (!exercise.prerequisites || exercise.prerequisites.length === 0) return true;
-	const completed = getCompletedIds(recentSessions);
-	return exercise.prerequisites.every((id) => completed.has(id));
+	const eligible = getProgressionEligibleIds(recentSessions);
+	return exercise.prerequisites.every((id) => eligible.has(id));
 }
 
 function exerciseAllowedForProfile(
@@ -107,7 +109,6 @@ function pickExercisesForBlocks(
 	while (remaining > 0 && safety < 50) {
 		safety += 1;
 		let picked = false;
-
 		for (const block of blocks) {
 			if (remaining <= 0) break;
 			const candidate = (poolByBlock.get(block) ?? []).find(
@@ -115,14 +116,11 @@ function pickExercisesForBlocks(
 					exercise.durationMinutes <= remaining &&
 					!chosen.some((selected) => selected.id === exercise.id),
 			);
-
-			if (candidate) {
-				chosen.push(candidate);
-				remaining -= candidate.durationMinutes;
-				picked = true;
-			}
+			if (!candidate) continue;
+			chosen.push(candidate);
+			remaining -= candidate.durationMinutes;
+			picked = true;
 		}
-
 		if (!picked) break;
 	}
 
@@ -145,7 +143,6 @@ function resolveBlocks(
 	for (const block of BLOCK_ORDER) {
 		if (!ordered.includes(block)) ordered.push(block);
 	}
-
 	return ordered;
 }
 
@@ -178,8 +175,11 @@ export function generateRoutine(
 	recentSessions?: SessionRecord[],
 ): DailyRoutine {
 	const available = filterExercisesByProfile(profile, recentSessions);
-	const blocks = resolveBlocks(goal, profile);
-	const chosen = pickExercisesForBlocks(available, blocks, minutes);
+	const chosen = pickExercisesForBlocks(
+		available,
+		resolveBlocks(goal, profile),
+		minutes,
+	);
 	const date = getLocalDateKey();
 
 	if (chosen.length === 0) {
@@ -189,14 +189,12 @@ export function generateRoutine(
 				(left, right) =>
 					(left.progressionLevel ?? 1) - (right.progressionLevel ?? 1),
 			)[0];
-
 		if (!fallback) {
 			return emptySafetyRoutine(
 				date,
 				"No se encontró una prescripción compatible con el perfil actual.",
 			);
 		}
-
 		return makeRoutine(
 			date,
 			[fallback],
@@ -211,7 +209,7 @@ export function generateRoutine(
 		date,
 		chosen,
 		`Rutina ${goalLabel} para ${voiceType}, nivel ${profile.level}`,
-		`Objetivos priorizados: ${profile.goals.join(", ")}. La clasificación vocal todavía no transpone automáticamente las frecuencias.`,
+		`Objetivos priorizados: ${profile.goals.join(", ")}. Los requisitos avanzados solo se desbloquean con evidencia medida elegible.`,
 	);
 }
 
@@ -238,7 +236,6 @@ function criticalReportReasons(input: DailyReportInput): string[] {
 	if (/dificultad.{0,20}tragar|dolor.{0,20}tragar/.test(text)) {
 		reasons.push("dificultad o dolor al tragar");
 	}
-
 	return [...new Set(reasons)];
 }
 
@@ -365,7 +362,7 @@ export function analyzeDailyReport(
 			input.date,
 			chosen,
 			recommendation,
-			`Autoinforme: tensión=${input.constriction}, passaggio=${input.passaggioControl}, energía=${input.energy}. Estas respuestas son subjetivas y no constituyen medición acústica.`,
+			`Autoinforme: tensión=${input.constriction}, passaggio=${input.passaggioControl}, energía=${input.energy}. Las respuestas son subjetivas; los desbloqueos técnicos dependen de evidencia medida.`,
 		),
 		closingPhrase:
 			"Usá la técnica como herramienta: una corrección clara, una repetición consciente.",
