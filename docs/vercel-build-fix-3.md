@@ -1,1 +1,0 @@
-The deployment must use the latest branch head, not commit `23b349b`.
