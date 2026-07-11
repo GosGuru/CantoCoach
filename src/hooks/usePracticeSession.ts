@@ -7,6 +7,11 @@ const PRACTICE_SESSIONS_STORAGE_KEY = "vocalgym-practice-sessions-v2";
 
 type FinalStatus = Exclude<PracticeSessionRecord["status"], "active">;
 
+/**
+ * Session persistence foundation. The hook is intentionally not wired into the
+ * player yet; the integration must atomically link attempts before replacing
+ * the legacy daily-session model.
+ */
 export function usePracticeSession(exerciseId: string) {
 	const [, setSessions] = useLocalStorage<PracticeSessionRecord[]>(
 		PRACTICE_SESSIONS_STORAGE_KEY,
