@@ -8,6 +8,7 @@ const START_DELAY_SECONDS = 0.035;
 
 interface UseVocalSynthesizerReturn {
 	isPlaying: boolean;
+	isPaused: boolean;
 	currentNoteIndex: number;
 	currentBpm: number;
 	setBpm: (bpm: number) => void;
@@ -96,7 +97,8 @@ export function useVocalSynthesizer(initialBpm = 90): UseVocalSynthesizerReturn 
 
 		for (const node of activeNodesRef.current) {
 			try {
-				if (node instanceof OscillatorNode) node.stop(now);
+				const stoppable = node as AudioNode & { stop?: (when?: number) => void };
+				if (typeof stoppable.stop === "function") stoppable.stop(now);
 				node.disconnect();
 			} catch {
 				// The node may have already ended.
@@ -413,6 +415,7 @@ export function useVocalSynthesizer(initialBpm = 90): UseVocalSynthesizerReturn 
 
 	return {
 		isPlaying,
+		isPaused,
 		currentNoteIndex,
 		currentBpm,
 		setBpm,
