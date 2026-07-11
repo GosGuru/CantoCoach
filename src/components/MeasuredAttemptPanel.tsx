@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	AlertTriangle,
 	BarChart3,
@@ -11,6 +11,11 @@ import {
 	Target,
 } from "lucide-react";
 import { compareAttempts } from "../domain/attempts/compareAttempts.ts";
+import {
+	prescriptionPosition,
+	totalPrescriptionRepetitions,
+	type ExercisePrescription,
+} from "../domain/practice/prescription.ts";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useMeasuredAttempt } from "../hooks/useMeasuredAttempt.ts";
 import type { AttemptTarget, ExerciseAttemptRecord } from "../types/attempt.ts";
@@ -18,11 +23,16 @@ import type { Exercise } from "../types/vocal";
 
 interface MeasuredAttemptPanelProps {
 	exercise: Exercise;
+	practiceSessionId: string;
+	prescription: ExercisePrescription;
+	completedRepetitions: number;
 	referencePlaying: boolean;
 	onPlayTarget: (target: AttemptTarget) => void;
+	onAttemptRecorded: (attempt: ExerciseAttemptRecord) => void;
 }
 
 const ATTEMPTS_STORAGE_KEY = "vocalgym-attempts-v1";
+const REFERENCE_WAIT_MS = 1650;
 
 function uniqueTargets(exercise: Exercise): AttemptTarget[] {
 	const targets = new Map<string, AttemptTarget>();
@@ -53,8 +63,12 @@ function isActiveStatus(status: ReturnType<typeof useMeasuredAttempt>["status"])
 
 export function MeasuredAttemptPanel({
 	exercise,
+	practiceSessionId,
+	prescription,
+	completedRepetitions,
 	referencePlaying,
 	onPlayTarget,
+	onAttemptRecorded,
 }: MeasuredAttemptPanelProps) {
 	const targets = useMemo(() => uniqueTargets(exercise), [exercise]);
 	const [selectedIndex, setSelectedIndex] = useState(() =>
@@ -64,6 +78,8 @@ export function MeasuredAttemptPanel({
 		ATTEMPTS_STORAGE_KEY,
 		[],
 	);
+	const reportedResultIds = useRef(new Set<string>());
+	const guidedTimerRef = useRef<number | null>(null);
 	const {
 		status,
 		countdown,
@@ -75,10 +91,16 @@ export function MeasuredAttemptPanel({
 		start,
 		cancel,
 		reset,
-	} = useMeasuredAttempt(exercise.id);
+	} = useMeasuredAttempt(
+		exercise.id,
+		practiceSessionId,
+		prescription.noteDurationMs,
+	);
 
 	const target = targets[selectedIndex] ?? targets[0];
 	const active = isActiveStatus(status);
+	const position = prescriptionPosition(completedRepetitions, prescription);
+	const totalRepetitions = totalPrescriptionRepetitions(prescription);
 
 	const previousAttempt = useMemo(() => {
 		if (!target) return null;
@@ -102,13 +124,15 @@ export function MeasuredAttemptPanel({
 	}, [attempts, previousAttempt, result]);
 
 	useEffect(() => {
-		if (!result) return;
+		if (!result || reportedResultIds.current.has(result.id)) return;
+		reportedResultIds.current.add(result.id);
 		setAttempts((current) =>
 			current.some((attempt) => attempt.id === result.id)
 				? current
 				: [...current, result],
 		);
-	}, [result, setAttempts]);
+		onAttemptRecorded(result);
+	}, [onAttemptRecorded, result, setAttempts]);
 
 	useEffect(() => {
 		if (referencePlaying && active) cancel();
@@ -118,6 +142,15 @@ export function MeasuredAttemptPanel({
 		reset();
 		setSelectedIndex(Math.floor(Math.max(0, targets.length - 1) / 2));
 	}, [exercise.id, reset, targets.length]);
+
+	useEffect(
+		() => () => {
+			if (guidedTimerRef.current !== null) {
+				window.clearTimeout(guidedTimerRef.current);
+			}
+		},
+		[],
+	);
 
 	if (!target) {
 		return (
@@ -129,17 +162,27 @@ export function MeasuredAttemptPanel({
 		);
 	}
 
-	const startAttempt = () => {
-		void start({ target, previousAttemptId: previousAttempt?.id });
+	const startAttempt = (previousAttemptId = previousAttempt?.id) => {
+		void start({ target, previousAttemptId });
 	};
 
-	const retryAttempt = () => {
-		const previousAttemptId = result?.id;
+	const startGuidedAttempt = (previousAttemptId = previousAttempt?.id) => {
+		if (guidedTimerRef.current !== null) {
+			window.clearTimeout(guidedTimerRef.current);
+		}
 		reset();
-		window.setTimeout(() => {
+		onPlayTarget(target);
+		guidedTimerRef.current = window.setTimeout(() => {
+			guidedTimerRef.current = null;
 			void start({ target, previousAttemptId });
-		}, 0);
+		}, REFERENCE_WAIT_MS);
 	};
+
+	const retryAttempt = () => startGuidedAttempt(result?.id);
+	const prescriptionProgress = Math.min(
+		100,
+		Math.round((completedRepetitions / totalRepetitions) * 100),
+	);
 
 	return (
 		<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
@@ -147,15 +190,33 @@ export function MeasuredAttemptPanel({
 				<div className="w-10 h-10 rounded-xl bg-emerald/15 flex items-center justify-center shrink-0">
 					<Target className="w-5 h-5 text-emerald" aria-hidden="true" />
 				</div>
-				<div>
-					<h2 className="section-title">Intento medido</h2>
+				<div className="min-w-0 flex-1">
+					<h2 className="section-title">Práctica prescrita</h2>
 					<p className="text-sm text-text-muted mt-1 leading-relaxed">
-						Escuchá una nota, mantené silencio durante la calibración y cantala recta
-						hasta que termine la barra. Se guardan métricas y trayectoria reducida, no
-						el audio.
+						{prescription.sets} series × {prescription.repetitionsPerSet} repeticiones ·{" "}
+						{(prescription.noteDurationMs / 1000).toFixed(1)} s por intento.
 					</p>
 				</div>
 			</header>
+
+			<div className="mt-4 rounded-xl border border-border bg-surface/60 p-4">
+				<div className="flex items-center justify-between gap-3 text-sm">
+					<span className="font-medium text-text">
+						{position.complete
+							? "Prescripción completada"
+							: `Serie ${position.set}/${prescription.sets} · Repetición ${position.repetition}/${prescription.repetitionsPerSet}`}
+					</span>
+					<span className="text-text-muted">
+						{completedRepetitions}/{totalRepetitions}
+					</span>
+				</div>
+				<div className="mt-3 h-2 rounded-full bg-canvas border border-border overflow-hidden">
+					<div
+						className="h-full bg-gradient-to-r from-accent to-emerald transition-[width]"
+						style={{ width: `${prescriptionProgress}%` }}
+					/>
+				</div>
+			</div>
 
 			<div className="mt-5">
 				<p className="text-xs uppercase tracking-wider text-text-subtle mb-2">
@@ -166,7 +227,7 @@ export function MeasuredAttemptPanel({
 						<button
 							key={`${item.frequencyHz}-${item.noteName}`}
 							type="button"
-							disabled={active}
+							disabled={active || position.complete}
 							onClick={() => {
 								reset();
 								setSelectedIndex(index);
@@ -183,38 +244,48 @@ export function MeasuredAttemptPanel({
 				</div>
 			</div>
 
-			<div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+			<div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
 				<button
 					type="button"
-					disabled={active || referencePlaying}
+					disabled={active || referencePlaying || position.complete}
 					onClick={() => onPlayTarget(target)}
 					className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary disabled:opacity-50"
 				>
 					<Play className="w-4 h-4" aria-hidden="true" />
-					Escuchar {target.noteName}
+					Solo escuchar
+				</button>
+				<button
+					type="button"
+					disabled={!isSupported || referencePlaying || active || position.complete}
+					onClick={() => startGuidedAttempt()}
+					className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary disabled:opacity-50"
+				>
+					<Headphones className="w-4 h-4" aria-hidden="true" />
+					Escuchar y grabar
 				</button>
 				<button
 					type="button"
 					disabled={
 					status === "analyzing" ||
+					position.complete ||
 					(!active && (!isSupported || referencePlaying))
 				}
-					onClick={active ? cancel : startAttempt}
+					onClick={active ? cancel : () => startAttempt()}
 					className={`inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium disabled:opacity-50 ${
 						active
 							? "border border-rose/40 bg-rose/10 text-rose"
-							: "btn-primary"
+							: "btn-secondary"
 					}`}
 				>
 					{active ? (
 						<>
 							<Square className="w-4 h-4" aria-hidden="true" />
-							Cancelar intento
+							Cancelar
 						</>
 					) : (
 						<>
 							<Mic2 className="w-4 h-4" aria-hidden="true" />
-							Grabar intento
+							Solo grabar
 						</>
 					)}
 				</button>
@@ -230,18 +301,10 @@ export function MeasuredAttemptPanel({
 			<div className="mt-5 rounded-xl border border-border bg-surface/60 min-h-40 flex items-center justify-center p-5">
 				{status === "idle" && (
 					<div className="text-center">
-						<Headphones
-							className="w-7 h-7 text-text-subtle mx-auto"
-							aria-hidden="true"
-						/>
+						<Headphones className="w-7 h-7 text-text-subtle mx-auto" aria-hidden="true" />
 						<p className="text-sm text-text-muted mt-2">
-							Usá auriculares y dejá un segundo de silencio al comenzar.
+							Usá auriculares y dejá silencio durante la calibración.
 						</p>
-						{previousAttempt && (
-							<p className="text-xs text-text-subtle mt-2">
-								Ya existe un intento comparable.
-							</p>
-						)}
 					</div>
 				)}
 				{status === "requesting" && (
@@ -249,21 +312,14 @@ export function MeasuredAttemptPanel({
 				)}
 				{status === "calibrating" && (
 					<div className="text-center">
-						<BarChart3
-							className="w-7 h-7 text-sky mx-auto animate-pulse"
-							aria-hidden="true"
-						/>
-						<p className="text-sm font-semibold text-text mt-2">
-							Calibrando el ambiente
-						</p>
+						<BarChart3 className="w-7 h-7 text-sky mx-auto animate-pulse" aria-hidden="true" />
+						<p className="text-sm font-semibold text-text mt-2">Calibrando el ambiente</p>
 						<p className="text-xs text-text-muted mt-1">Mantené silencio.</p>
 					</div>
 				)}
 				{status === "countdown" && (
 					<div className="text-center">
-						<p className="text-6xl font-bold font-display text-accent">
-							{countdown}
-						</p>
+						<p className="text-6xl font-bold font-display text-accent">{countdown}</p>
 						<p className="text-sm text-text-muted mt-2">Prepará {target.noteName}</p>
 					</div>
 				)}
@@ -303,9 +359,7 @@ export function MeasuredAttemptPanel({
 				{status === "error" && (
 					<div className="text-center">
 						<AlertTriangle className="w-7 h-7 text-rose mx-auto" aria-hidden="true" />
-						<p className="text-sm text-rose mt-2">
-							No se pudo completar el intento.
-						</p>
+						<p className="text-sm text-rose mt-2">No se pudo completar el intento.</p>
 					</div>
 				)}
 				{status === "complete" && result && (
@@ -317,9 +371,7 @@ export function MeasuredAttemptPanel({
 								}`}
 								aria-hidden="true"
 							/>
-							<p className="font-semibold text-text">
-								{result.feedback.observation}
-							</p>
+							<p className="font-semibold text-text">{result.feedback.observation}</p>
 						</div>
 						<p className="text-sm text-text-muted mt-2 leading-relaxed">
 							{result.feedback.evidence}
@@ -392,20 +444,22 @@ export function MeasuredAttemptPanel({
 						</div>
 					)}
 
-					<button
-						type="button"
-						onClick={retryAttempt}
-						className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary"
-					>
-						<RefreshCw className="w-4 h-4" aria-hidden="true" />
-						Reintentar con la corrección
-					</button>
+					{!position.complete && (
+						<button
+							type="button"
+							onClick={retryAttempt}
+							className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary"
+						>
+							<RefreshCw className="w-4 h-4" aria-hidden="true" />
+							Siguiente repetición con la corrección
+						</button>
+					)}
 				</>
 			)}
 
 			<p className="mt-4 text-xs text-text-subtle">
-				La app mide señal acústica. No determina apoyo, registro, tensión muscular ni
-				estado anatómico.
+				Solo los intentos evaluables avanzan la prescripción. La app mide señal
+				acústica; no determina apoyo, registro ni estado anatómico.
 			</p>
 		</section>
 	);
