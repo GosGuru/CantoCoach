@@ -4,7 +4,17 @@ import {
 	type PitchObservation,
 } from "../audio/analysis/attemptMetrics.ts";
 import { buildTechnicalFeedback } from "../audio/analysis/technicalFeedback.ts";
-import { frequencyToNearestNote, median } from "../audio/pitch/pitchMath.ts";
+import {
+	buildCalibrationProfile,
+	evaluateVoiceActivity,
+	smoothNoiseFloor,
+	type CalibrationProfile,
+} from "../audio/input/voiceActivity.ts";
+import {
+	createPitchContinuityState,
+	stabilizePitchFrequency,
+} from "../audio/pitch/pitchContinuity.ts";
+import { frequencyToNearestNote } from "../audio/pitch/pitchMath.ts";
 import { detectPitchYin } from "../audio/pitch/yin.ts";
 import type { AttemptTarget, ExerciseAttemptRecord } from "../types/attempt.ts";
 import { getLocalDateKey } from "../utils/localDate.ts";
@@ -18,6 +28,14 @@ export type MeasuredAttemptStatus =
 	| "analyzing"
 	| "complete"
 	| "error";
+
+export type InputSignalState =
+	| "idle"
+	| "quiet"
+	| "low"
+	| "voice"
+	| "noisy"
+	| "clipping";
 
 export interface LiveAttemptReading {
 	frequencyHz: number;
@@ -36,6 +54,8 @@ interface UseMeasuredAttemptReturn {
 	countdown: number | null;
 	progress: number;
 	hasVoiceStarted: boolean;
+	inputLevel: number;
+	inputState: InputSignalState;
 	reading: LiveAttemptReading | null;
 	result: ExerciseAttemptRecord | null;
 	errorMessage: string | null;
@@ -45,11 +65,19 @@ interface UseMeasuredAttemptReturn {
 	reset: () => void;
 }
 
+interface BufferedObservation {
+	capturedAt: number;
+	observation: PitchObservation;
+	clipped: boolean;
+}
+
 const FFT_SIZE = 4096;
-const ANALYSIS_INTERVAL_MS = 45;
-const CALIBRATION_DURATION_MS = 1100;
+const ANALYSIS_INTERVAL_MS = 35;
+const CALIBRATION_DURATION_MS = 900;
 const COUNTDOWN_SECONDS = 2;
-const MAX_VOICE_START_WAIT_MS = 3500;
+const MAX_VOICE_START_WAIT_MS = 6000;
+const PRE_ROLL_MS = 320;
+const REQUIRED_ACTIVE_FRAMES = 2;
 
 function calculateRms(buffer: Float32Array): number {
 	if (buffer.length === 0) return 0;
@@ -58,11 +86,17 @@ function calculateRms(buffer: Float32Array): number {
 	return Math.sqrt(sum / buffer.length);
 }
 
-function isClipped(buffer: Float32Array): boolean {
-	for (const sample of buffer) {
-		if (Math.abs(sample) >= 0.985) return true;
-	}
-	return false;
+function calculatePeak(buffer: Float32Array): number {
+	let peak = 0;
+	for (const sample of buffer) peak = Math.max(peak, Math.abs(sample));
+	return peak;
+}
+
+function signalLevel(rms: number, profile: CalibrationProfile): number {
+	return Math.max(
+		0,
+		Math.min(1, rms / Math.max(profile.voiceThresholdRms * 2.6, 0.018)),
+	);
 }
 
 export function useMeasuredAttempt(
@@ -74,6 +108,8 @@ export function useMeasuredAttempt(
 	const [countdown, setCountdown] = useState<number | null>(null);
 	const [progress, setProgress] = useState(0);
 	const [hasVoiceStarted, setHasVoiceStarted] = useState(false);
+	const [inputLevel, setInputLevel] = useState(0);
+	const [inputState, setInputState] = useState<InputSignalState>("idle");
 	const [reading, setReading] = useState<LiveAttemptReading | null>(null);
 	const [result, setResult] = useState<ExerciseAttemptRecord | null>(null);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -139,6 +175,8 @@ export function useMeasuredAttempt(
 		setCountdown(null);
 		setProgress(0);
 		setHasVoiceStarted(false);
+		setInputLevel(0);
+		setInputState("idle");
 		setReading(null);
 		setErrorMessage(null);
 		updateStatus("idle");
@@ -160,20 +198,37 @@ export function useMeasuredAttempt(
 			setReading(null);
 			setProgress(0);
 			setHasVoiceStarted(false);
+			setInputLevel(0);
+			setInputState("quiet");
 			setCountdown(null);
 			setErrorMessage(null);
 			updateStatus("requesting");
 
 			try {
-				const stream = await navigator.mediaDevices.getUserMedia({
-					video: false,
-					audio: {
-						echoCancellation: false,
-						noiseSuppression: false,
-						autoGainControl: false,
-						channelCount: 1,
-					},
-				});
+				let stream: MediaStream;
+				try {
+					stream = await navigator.mediaDevices.getUserMedia({
+						video: false,
+						audio: {
+							echoCancellation: { ideal: true },
+							noiseSuppression: { ideal: false },
+							autoGainControl: { ideal: true },
+							channelCount: { ideal: 1 },
+							latency: { ideal: 0.02 },
+						},
+					});
+				} catch (constraintError) {
+					if (
+						constraintError instanceof DOMException &&
+						constraintError.name === "NotAllowedError"
+					) {
+						throw constraintError;
+					}
+					stream = await navigator.mediaDevices.getUserMedia({
+						video: false,
+						audio: true,
+					});
+				}
 
 				if (runTokenRef.current !== token) {
 					for (const track of stream.getTracks()) track.stop();
@@ -201,9 +256,12 @@ export function useMeasuredAttempt(
 
 				const calibrationSamples: number[] = [];
 				const observations: PitchObservation[] = [];
-				let noiseFloorRms = 0.006;
+				const preRoll: BufferedObservation[] = [];
+				const pitchContinuity = createPitchContinuityState();
+				let profile = buildCalibrationProfile([]);
 				let recordingWindowOpenedAt = 0;
 				let voiceStartedAt: number | null = null;
+				let activeFrameStreak = 0;
 				let totalFrames = 0;
 				let clippedFrames = 0;
 
@@ -228,7 +286,7 @@ export function useMeasuredAttempt(
 						metrics,
 						feedback,
 						captureQuality: {
-							noiseFloorRms,
+							noiseFloorRms: profile.noiseFloorRms,
 							clippedFrameRatio:
 								totalFrames === 0 ? 0 : clippedFrames / totalFrames,
 							sampleRate: context.sampleRate,
@@ -241,6 +299,8 @@ export function useMeasuredAttempt(
 					releaseResources();
 					setProgress(voiceStartedAt ? 1 : 0);
 					setCountdown(null);
+					setInputLevel(0);
+					setInputState("idle");
 					setReading(null);
 					setResult(record);
 					updateStatus("complete");
@@ -254,12 +314,15 @@ export function useMeasuredAttempt(
 					setReading(null);
 					recordingWindowOpenedAt = performance.now();
 					voiceStartedAt = null;
+					activeFrameStreak = 0;
+					preRoll.length = 0;
 					updateStatus("recording");
 				};
 
 				const beginCountdown = () => {
 					if (runTokenRef.current !== token) return;
-					noiseFloorRms = Math.max(0.001, median(calibrationSamples) ?? 0.006);
+					profile = buildCalibrationProfile(calibrationSamples);
+					setInputState(profile.highNoise ? "noisy" : "quiet");
 					updateStatus("countdown");
 					let remaining = COUNTDOWN_SECONDS;
 					setCountdown(remaining);
@@ -289,24 +352,92 @@ export function useMeasuredAttempt(
 					const samples = new Float32Array(activeAnalyser.fftSize);
 					activeAnalyser.getFloatTimeDomainData(samples);
 					const rms = calculateRms(samples);
+					const peak = calculatePeak(samples);
+					const clipped = peak >= 0.985;
 
 					if (statusRef.current === "calibrating") {
 						calibrationSamples.push(rms);
+						const provisional = buildCalibrationProfile(calibrationSamples);
+						setInputLevel(signalLevel(rms, provisional));
+						setInputState(clipped ? "clipping" : provisional.highNoise ? "noisy" : "quiet");
+						return;
+					}
+
+					setInputLevel(signalLevel(rms, profile));
+					if (statusRef.current === "countdown") {
+						setInputState(clipped ? "clipping" : profile.highNoise ? "noisy" : "quiet");
 						return;
 					}
 					if (statusRef.current !== "recording") return;
 
 					const now = performance.now();
-					const detection = detectPitchYin(samples, context.sampleRate, {
-						minFrequencyHz: 70,
+					const rawDetection = detectPitchYin(samples, context.sampleRate, {
+						minFrequencyHz: 65,
 						maxFrequencyHz: 800,
-						minConfidence: 0.68,
-						minRms: Math.max(0.0045, noiseFloorRms * 1.9),
+						threshold: 0.22,
+						minConfidence: 0.44,
+						minRms: Math.max(0.0022, profile.noiseFloorRms * 1.05),
 					});
+					const stabilizedFrequency = rawDetection
+						? stabilizePitchFrequency(
+								rawDetection.frequencyHz,
+								target.frequencyHz,
+								pitchContinuity,
+							)
+						: null;
+					const activity = evaluateVoiceActivity(
+						{
+							rms,
+							peak,
+							pitchConfidence: rawDetection?.confidence,
+						},
+						profile,
+					);
+					const observation: PitchObservation = {
+						timestampMs: 0,
+						frequencyHz: stabilizedFrequency,
+						confidence: rawDetection?.confidence ?? 0,
+						rms,
+						voiceActive: activity.active,
+					};
+
+					setInputState(
+						clipped
+							? "clipping"
+							: activity.active
+								? "voice"
+								: rms >= profile.noiseFloorRms * 1.15
+									? "low"
+									: profile.highNoise
+										? "noisy"
+										: "quiet",
+					);
 
 					if (voiceStartedAt === null) {
-						if (detection) {
-							voiceStartedAt = now;
+						if (!activity.active) profile = smoothNoiseFloor(profile, rms);
+						preRoll.push({ capturedAt: now, observation, clipped });
+						while (
+							preRoll.length > 0 &&
+							now - preRoll[0].capturedAt > PRE_ROLL_MS
+						) {
+							preRoll.shift();
+						}
+						activeFrameStreak = activity.active
+							? activeFrameStreak + 1
+							: Math.max(0, activeFrameStreak - 1);
+
+						if (activeFrameStreak >= REQUIRED_ACTIVE_FRAMES) {
+							const firstActiveIndex = Math.max(0, preRoll.length - 6);
+							const selectedPreRoll = preRoll.slice(firstActiveIndex);
+							voiceStartedAt = selectedPreRoll[0]?.capturedAt ?? now;
+							for (const buffered of selectedPreRoll) {
+								observations.push({
+									...buffered.observation,
+									timestampMs: buffered.capturedAt - voiceStartedAt,
+								});
+								totalFrames += 1;
+								if (buffered.clipped) clippedFrames += 1;
+							}
 							setHasVoiceStarted(true);
 						} else if (now - recordingWindowOpenedAt >= MAX_VOICE_START_WAIT_MS) {
 							finalize();
@@ -316,36 +447,33 @@ export function useMeasuredAttempt(
 							setReading(null);
 							return;
 						}
+					} else {
+						const timestampMs = now - voiceStartedAt;
+						observations.push({ ...observation, timestampMs });
+						totalFrames += 1;
+						if (clipped) clippedFrames += 1;
 					}
 
-					const timestampMs = now - voiceStartedAt;
-					totalFrames += 1;
-					if (isClipped(samples)) clippedFrames += 1;
-					observations.push({
-						timestampMs,
-						frequencyHz: detection?.frequencyHz ?? null,
-						confidence: detection?.confidence ?? 0,
-						rms,
-					});
-
-					if (detection) {
-						const nearest = frequencyToNearestNote(detection.frequencyHz);
+					if (stabilizedFrequency !== null && rawDetection) {
+						const nearest = frequencyToNearestNote(stabilizedFrequency);
 						setReading({
-							frequencyHz: detection.frequencyHz,
+							frequencyHz: stabilizedFrequency,
 							noteName: nearest.noteName,
 							cents: nearest.cents,
-							confidence: detection.confidence,
+							confidence: rawDetection.confidence,
 						});
 					} else {
 						setReading(null);
 					}
 
+					const timestampMs = voiceStartedAt === null ? 0 : now - voiceStartedAt;
 					setProgress(Math.min(1, timestampMs / durationMs));
 					if (timestampMs >= durationMs) finalize();
 				}, ANALYSIS_INTERVAL_MS);
 			} catch (error) {
 				releaseResources();
 				updateStatus("error");
+				setInputState("idle");
 				setErrorMessage(
 					error instanceof DOMException && error.name === "NotAllowedError"
 						? "No se concedió permiso para usar el micrófono."
@@ -375,6 +503,8 @@ export function useMeasuredAttempt(
 		countdown,
 		progress,
 		hasVoiceStarted,
+		inputLevel,
+		inputState,
 		reading,
 		result,
 		errorMessage,
