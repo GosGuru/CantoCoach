@@ -18,7 +18,10 @@ import {
 	type ExercisePrescription,
 } from "../domain/practice/prescription.ts";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { useMeasuredAttempt } from "../hooks/useMeasuredAttempt.ts";
+import {
+	useMeasuredAttempt,
+	type InputSignalState,
+} from "../hooks/useMeasuredAttempt.ts";
 import type { AttemptTarget, ExerciseAttemptRecord } from "../types/attempt.ts";
 import type { Exercise } from "../types/vocal";
 
@@ -35,6 +38,30 @@ interface MeasuredAttemptPanelProps {
 const ATTEMPTS_STORAGE_KEY = "vocalgym-attempts-v1";
 const POST_REFERENCE_SILENCE_MS = 450;
 const DURATION_OPTIONS_MS = [4000, 6000, 8000] as const;
+
+const SIGNAL_COPY: Record<InputSignalState, { label: string; hint: string }> = {
+	idle: { label: "Micrófono inactivo", hint: "" },
+	quiet: {
+		label: "Ambiente estable",
+		hint: "No necesitás silencio absoluto; evitá hablar durante esta etapa.",
+	},
+	low: {
+		label: "Señal baja",
+		hint: "La app escucha algo, pero conviene acercarte un poco al micrófono.",
+	},
+	voice: {
+		label: "Voz detectada",
+		hint: "La captura está recibiendo señal vocal.",
+	},
+	noisy: {
+		label: "Ambiente ruidoso",
+		hint: "La app se adapta, pero alejate de ventiladores, TV o música si podés.",
+	},
+	clipping: {
+		label: "Señal saturada",
+		hint: "Alejate un poco o bajá el volumen para no recortar la señal.",
+	},
+};
 
 function uniqueTargets(exercise: Exercise): AttemptTarget[] {
 	const targets = new Map<string, AttemptTarget>();
@@ -67,6 +94,39 @@ function delay(milliseconds: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+function MicrophoneMeter({
+	level,
+	state,
+}: {
+	level: number;
+	state: InputSignalState;
+}) {
+	const copy = SIGNAL_COPY[state];
+	return (
+		<div className="mt-4 w-full max-w-md mx-auto">
+			<div className="flex items-center justify-between gap-3 text-xs">
+				<span className="font-medium text-text-muted">{copy.label}</span>
+				<span className="text-text-subtle">{Math.round(level * 100)}%</span>
+			</div>
+			<div className="mt-2 h-2 rounded-full bg-canvas border border-border overflow-hidden">
+				<div
+					className={`h-full transition-[width] duration-75 ${
+						state === "clipping"
+							? "bg-rose"
+							: state === "voice"
+								? "bg-emerald"
+								: state === "noisy"
+									? "bg-gold"
+									: "bg-sky"
+					}`}
+					style={{ width: `${Math.max(2, Math.round(level * 100))}%` }}
+				/>
+			</div>
+			{copy.hint && <p className="mt-2 text-xs text-text-subtle">{copy.hint}</p>}
+		</div>
+	);
+}
+
 export function MeasuredAttemptPanel({
 	exercise,
 	practiceSessionId,
@@ -94,6 +154,8 @@ export function MeasuredAttemptPanel({
 		countdown,
 		progress,
 		hasVoiceStarted,
+		inputLevel,
+		inputState,
 		reading,
 		result,
 		errorMessage,
@@ -197,9 +259,7 @@ export function MeasuredAttemptPanel({
 		cancel();
 	};
 
-	const retryAttempt = () => {
-		void startGuidedAttempt(result?.id);
-	};
+	const retryAttempt = () => void startGuidedAttempt(result?.id);
 	const prescriptionProgress = Math.min(
 		100,
 		Math.round((completedRepetitions / totalRepetitions) * 100),
@@ -215,7 +275,7 @@ export function MeasuredAttemptPanel({
 					<h2 className="section-title">Práctica prescrita</h2>
 					<p className="text-sm text-text-muted mt-1 leading-relaxed">
 						{prescription.sets} series × {prescription.repetitionsPerSet} repeticiones.
-						El tiempo comienza cuando la app detecta que realmente empezaste a cantar.
+						 El tiempo empieza después de detectar tu entrada vocal.
 					</p>
 				</div>
 			</header>
@@ -329,13 +389,11 @@ export function MeasuredAttemptPanel({
 				>
 					{active ? (
 						<>
-							<Square className="w-4 h-4" aria-hidden="true" />
-							Cancelar
+							<Square className="w-4 h-4" aria-hidden="true" /> Cancelar
 						</>
 					) : (
 						<>
-							<Mic2 className="w-4 h-4" aria-hidden="true" />
-							Solo grabar
+							<Mic2 className="w-4 h-4" aria-hidden="true" /> Solo grabar
 						</>
 					)}
 				</button>
@@ -348,12 +406,12 @@ export function MeasuredAttemptPanel({
 			)}
 			{errorMessage && <p className="mt-4 text-sm text-rose">{errorMessage}</p>}
 
-			<div className="mt-5 rounded-xl border border-border bg-surface/60 min-h-40 flex items-center justify-center p-5">
+			<div className="mt-5 rounded-xl border border-border bg-surface/60 min-h-48 flex items-center justify-center p-5">
 				{status === "idle" && !guidedStarting && (
 					<div className="text-center">
 						<Headphones className="w-7 h-7 text-text-subtle mx-auto" aria-hidden="true" />
 						<p className="text-sm text-text-muted mt-2">
-							Usá auriculares. La app espera hasta 3,5 segundos a que empieces a cantar.
+							Usá auriculares. La app puede adaptarse al ruido normal del ambiente.
 						</p>
 					</div>
 				)}
@@ -364,16 +422,20 @@ export function MeasuredAttemptPanel({
 					<p className="text-sm text-text-muted">Solicitando el micrófono…</p>
 				)}
 				{status === "calibrating" && (
-					<div className="text-center">
+					<div className="text-center w-full">
 						<BarChart3 className="w-7 h-7 text-sky mx-auto animate-pulse" aria-hidden="true" />
-						<p className="text-sm font-semibold text-text mt-2">Calibrando el ambiente</p>
-						<p className="text-xs text-text-muted mt-1">Mantené silencio un instante.</p>
+						<p className="text-sm font-semibold text-text mt-2">Midiendo el ambiente</p>
+						<p className="text-xs text-text-muted mt-1">
+							No hace falta silencio absoluto; solo no cantes todavía.
+						</p>
+						<MicrophoneMeter level={inputLevel} state={inputState} />
 					</div>
 				)}
 				{status === "countdown" && (
-					<div className="text-center">
+					<div className="text-center w-full">
 						<p className="text-6xl font-bold font-display text-accent">{countdown}</p>
 						<p className="text-sm text-text-muted mt-2">Prepará {target.noteName}</p>
+						<MicrophoneMeter level={inputLevel} state={inputState} />
 					</div>
 				)}
 				{status === "recording" && (
@@ -394,10 +456,11 @@ export function MeasuredAttemptPanel({
 						) : (
 							<p className="text-sm text-text-muted mt-4">
 								{hasVoiceStarted
-									? "Seguimos grabando aunque haya un pequeño corte."
-									: "Empezá a cantar cuando estés cómodo; el tiempo todavía no corre."}
+									? "La voz sigue grabándose aunque el pitch tarde en estabilizarse."
+									: "Empezá a cantar cuando estés cómodo; la app espera hasta 6 segundos."}
 							</p>
 						)}
+						<MicrophoneMeter level={inputLevel} state={inputState} />
 						<div className="mt-5 h-2 bg-canvas rounded-full overflow-hidden border border-border">
 							<div
 								className="h-full bg-gradient-to-r from-accent to-emerald transition-[width] duration-75"
@@ -408,7 +471,7 @@ export function MeasuredAttemptPanel({
 				)}
 				{status === "analyzing" && (
 					<p className="text-sm text-text-muted">
-						Calculando ataque, afinación y estabilidad…
+						Separando actividad vocal, pitch y estabilidad…
 					</p>
 				)}
 				{status === "error" && (
@@ -462,10 +525,7 @@ export function MeasuredAttemptPanel({
 						<div className="rounded-lg bg-surface border border-border p-3">
 							<p className="text-[10px] uppercase text-text-subtle">Error central</p>
 							<p className="text-sm font-semibold mt-1">
-								{formatMetric(
-									result.metrics.medianAbsolutePitchErrorCents,
-									"cents",
-								)}
+								{formatMetric(result.metrics.medianAbsolutePitchErrorCents, "cents")}
 							</p>
 						</div>
 						<div className="rounded-lg bg-surface border border-border p-3">
