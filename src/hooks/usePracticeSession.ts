@@ -8,7 +8,7 @@ const PRACTICE_SESSIONS_STORAGE_KEY = "vocalgym-practice-sessions-v2";
 type FinalStatus = Exclude<PracticeSessionRecord["status"], "active">;
 
 export function usePracticeSession(exerciseId: string) {
-	const [sessions, setSessions] = useLocalStorage<PracticeSessionRecord[]>(
+	const [, setSessions] = useLocalStorage<PracticeSessionRecord[]>(
 		PRACTICE_SESSIONS_STORAGE_KEY,
 		[],
 	);
@@ -80,7 +80,6 @@ export function usePracticeSession(exerciseId: string) {
 
 	return {
 		sessionId,
-		sessions,
 		registerAttempt,
 		complete,
 		closePartial,
