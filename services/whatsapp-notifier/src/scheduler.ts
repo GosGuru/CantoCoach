@@ -2,11 +2,14 @@ import cron from "node-cron";
 import { config } from "./config.js";
 import { buildDailyMessage, sendWhatsAppMessage } from "./notifier.js";
 
-export function startScheduler(): void {
-  const routineUrl = `${config.APP_URL}/dashboard`;
+function resolveRoutineUrl(): string {
+  return config.APP_URL.replace(/\/$/, "");
+}
 
-  const isValid = cron.validate(config.CRON_SCHEDULE);
-  if (!isValid) {
+export function startScheduler(): void {
+  const routineUrl = resolveRoutineUrl();
+
+  if (!cron.validate(config.CRON_SCHEDULE)) {
     throw new Error(`CRON_SCHEDULE inválida: ${config.CRON_SCHEDULE}`);
   }
 
@@ -25,17 +28,17 @@ export function startScheduler(): void {
           message,
         });
       } catch (error) {
-        console.error("[Scheduler] Fallo el envío programado:", error);
+        console.error("[Scheduler] Falló el envío programado:", error);
       }
     },
     {
       timezone: config.TIMEZONE,
-    }
+    },
   );
 }
 
 export async function sendImmediateNotification(): Promise<void> {
-  const routineUrl = `${config.APP_URL}/dashboard`;
+  const routineUrl = resolveRoutineUrl();
   const message = buildDailyMessage(routineUrl);
   await sendWhatsAppMessage({
     phone: config.RECIPIENT_PHONE,

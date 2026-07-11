@@ -1,300 +1,421 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ScalePattern } from "../types/vocal";
 
-const NOTE_GAP = 0.05; // seconds of silence between notes for articulation
-const ATTACK_TIME = 0.01;
-const PEAK_GAIN = 0.5;
-const RELEASE_VALUE = 0.001;
-const FILTER_START = 1200; // Hz
-const FILTER_END = 400; // Hz
+const MIN_GAIN = 0.0001;
+const PEAK_GAIN = 0.42;
+const ATTACK_SECONDS = 0.012;
+const START_DELAY_SECONDS = 0.035;
 
 interface UseVocalSynthesizerReturn {
 	isPlaying: boolean;
+	isPaused: boolean;
 	currentNoteIndex: number;
 	currentBpm: number;
 	setBpm: (bpm: number) => void;
-	startScale: (frequencies: number[]) => void;
+	startScale: (pattern: ScalePattern | number[]) => void;
 	pause: () => void;
 	resume: () => void;
 	stop: () => void;
 }
 
-export function useVocalSynthesizer(): UseVocalSynthesizerReturn {
+interface PlaybackTiming {
+	stepSeconds: number;
+	noteSeconds: number;
+	continuous: boolean;
+}
+
+function clampBpm(bpm: number): number {
+	return Math.max(40, Math.min(208, Math.round(bpm)));
+}
+
+function normalizePattern(pattern: ScalePattern | number[]): ScalePattern {
+	if (Array.isArray(pattern)) {
+		return {
+			type: "5-note-ascending-descending",
+			defaultBpm: 90,
+			frequencies: pattern,
+		};
+	}
+	return pattern;
+}
+
+function resolveTiming(pattern: ScalePattern, bpm: number): PlaybackTiming {
+	const beat = 60 / bpm;
+
+	switch (pattern.type) {
+		case "staccato":
+			return { stepSeconds: beat, noteSeconds: beat * 0.42, continuous: false };
+		case "legato":
+			return { stepSeconds: beat * 0.9, noteSeconds: beat * 0.96, continuous: false };
+		case "sustained":
+			return { stepSeconds: beat * 1.4, noteSeconds: beat * 1.3, continuous: false };
+		case "sirens":
+		case "octave-slide":
+			return { stepSeconds: beat, noteSeconds: beat, continuous: true };
+		default:
+			return { stepSeconds: beat, noteSeconds: beat * 0.86, continuous: false };
+	}
+}
+
+export function useVocalSynthesizer(initialBpm = 90): UseVocalSynthesizerReturn {
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [isPaused, setIsPaused] = useState(false);
 	const [currentNoteIndex, setCurrentNoteIndex] = useState(-1);
-	const [currentBpm, setCurrentBpm] = useState(90);
+	const [currentBpm, setCurrentBpm] = useState(() => clampBpm(initialBpm));
 
-	const audioCtxRef = useRef<AudioContext | null>(null);
-	const frequenciesRef = useRef<number[]>([]);
-	const startTimeRef = useRef<number>(0);
-	const currentNoteRef = useRef<number>(-1);
-	const rafIdRef = useRef<number | null>(null);
+	const audioContextRef = useRef<AudioContext | null>(null);
+	const patternRef = useRef<ScalePattern | null>(null);
+	const currentIndexRef = useRef(-1);
+	const isPlayingRef = useRef(false);
+	const bpmRef = useRef(clampBpm(initialBpm));
+	const timelineStartRef = useRef(0);
+	const stepSecondsRef = useRef(1);
+	const frameRef = useRef<number | null>(null);
 	const activeNodesRef = useRef<Set<AudioNode>>(new Set());
-	const bpmRef = useRef(currentBpm);
-	const isPlayingRef = useRef(isPlaying);
-
-	useEffect(() => {
-		bpmRef.current = currentBpm;
-	}, [currentBpm]);
 
 	useEffect(() => {
 		isPlayingRef.current = isPlaying;
 	}, [isPlaying]);
 
-	const cancelRaf = useCallback(() => {
-		if (rafIdRef.current !== null) {
-			cancelAnimationFrame(rafIdRef.current);
-			rafIdRef.current = null;
+	useEffect(() => {
+		if (isPlayingRef.current) return;
+		const nextBpm = clampBpm(initialBpm);
+		bpmRef.current = nextBpm;
+		setCurrentBpm(nextBpm);
+	}, [initialBpm]);
+
+	const cancelAnimation = useCallback(() => {
+		if (frameRef.current !== null) {
+			cancelAnimationFrame(frameRef.current);
+			frameRef.current = null;
 		}
 	}, []);
 
-	const disposeAllSounds = useCallback(() => {
-		const ctx = audioCtxRef.current;
-		const now = ctx?.currentTime ?? 0;
-		activeNodesRef.current.forEach((node) => {
+	const disposeNodes = useCallback(() => {
+		const context = audioContextRef.current;
+		const now = context?.currentTime ?? 0;
+
+		for (const node of activeNodesRef.current) {
 			try {
-				if (node instanceof OscillatorNode) {
-					node.stop(now);
-				}
+				const stoppable = node as AudioNode & { stop?: (when?: number) => void };
+				if (typeof stoppable.stop === "function") stoppable.stop(now);
 				node.disconnect();
 			} catch {
-				// Node may already be stopped or disconnected.
+				// The node may have already ended.
 			}
-		});
+		}
 		activeNodesRef.current.clear();
 	}, []);
 
-	const scheduleNote = useCallback(
-		(ctx: AudioContext, frequency: number, when: number, duration: number) => {
-			// Oscillator 1: Fundamental — triangle wave for the wooden body of the note.
-			const fundamentalOsc = ctx.createOscillator();
-			fundamentalOsc.type = "triangle";
-			fundamentalOsc.frequency.setValueAtTime(frequency, when);
-
-			const fundamentalGain = ctx.createGain();
-			fundamentalGain.gain.setValueAtTime(0.6, when);
-
-			// Oscillator 2: First harmonic — sine wave one octave above for tuning clarity.
-			const firstHarmonicOsc = ctx.createOscillator();
-			firstHarmonicOsc.type = "sine";
-			firstHarmonicOsc.frequency.setValueAtTime(frequency * 2, when);
-
-			const firstHarmonicGain = ctx.createGain();
-			firstHarmonicGain.gain.setValueAtTime(0.18, when);
-
-			// Oscillator 3: Second harmonic — sine wave one octave + fifth above for acoustic brightness.
-			const secondHarmonicOsc = ctx.createOscillator();
-			secondHarmonicOsc.type = "sine";
-			secondHarmonicOsc.frequency.setValueAtTime(frequency * 3, when);
-
-			const secondHarmonicGain = ctx.createGain();
-			secondHarmonicGain.gain.setValueAtTime(0.05, when);
-
-			// Master gain envelope: fast attack + exponential decay for a piano-like feel.
-			const masterGain = ctx.createGain();
-			masterGain.gain.setValueAtTime(0.0001, when);
-			masterGain.gain.exponentialRampToValueAtTime(
-				PEAK_GAIN,
-				when + ATTACK_TIME,
-			);
-			masterGain.gain.exponentialRampToValueAtTime(
-				RELEASE_VALUE,
-				when + duration,
-			);
-
-			// Dynamic lowpass filter: bright attack, warm decay.
-			const filter = ctx.createBiquadFilter();
-			filter.type = "lowpass";
-			filter.frequency.setValueAtTime(FILTER_START, when);
-			filter.frequency.exponentialRampToValueAtTime(
-				FILTER_END,
-				when + duration,
-			);
-			filter.Q.setValueAtTime(0.7, when);
-
-			// Route all partials into the master gain, then through the filter.
-			fundamentalOsc.connect(fundamentalGain);
-			firstHarmonicOsc.connect(firstHarmonicGain);
-			secondHarmonicOsc.connect(secondHarmonicGain);
-
-			fundamentalGain.connect(masterGain);
-			firstHarmonicGain.connect(masterGain);
-			secondHarmonicGain.connect(masterGain);
-
-			masterGain.connect(filter);
-			filter.connect(ctx.destination);
-
-			fundamentalOsc.start(when);
-			firstHarmonicOsc.start(when);
-			secondHarmonicOsc.start(when);
-
-			fundamentalOsc.stop(when + duration + 0.02);
-			firstHarmonicOsc.stop(when + duration + 0.02);
-			secondHarmonicOsc.stop(when + duration + 0.02);
-
-			const nodes: AudioNode[] = [
-				fundamentalOsc,
-				firstHarmonicOsc,
-				secondHarmonicOsc,
-				fundamentalGain,
-				firstHarmonicGain,
-				secondHarmonicGain,
-				masterGain,
-				filter,
-			];
-			nodes.forEach((node) => activeNodesRef.current.add(node));
-
-			const cleanup = () => {
-				nodes.forEach((node) => {
+	const registerNodes = useCallback((nodes: AudioNode[], cleanupNode: OscillatorNode) => {
+		for (const node of nodes) activeNodesRef.current.add(node);
+		cleanupNode.addEventListener(
+			"ended",
+			() => {
+				for (const node of nodes) {
 					try {
 						node.disconnect();
 					} catch {
-						// Ignore already-disconnected nodes.
+						// Ignore already disconnected nodes.
 					}
 					activeNodesRef.current.delete(node);
-				});
-			};
+				}
+			},
+			{ once: true },
+		);
+	}, []);
 
-			fundamentalOsc.addEventListener("ended", cleanup, { once: true });
+	const createTone = useCallback(
+		(
+			context: AudioContext,
+			frequency: number,
+			when: number,
+			duration: number,
+		) => {
+			const fundamental = context.createOscillator();
+			fundamental.type = "triangle";
+			fundamental.frequency.setValueAtTime(frequency, when);
+
+			const harmonic = context.createOscillator();
+			harmonic.type = "sine";
+			harmonic.frequency.setValueAtTime(frequency * 2, when);
+
+			const fundamentalGain = context.createGain();
+			fundamentalGain.gain.setValueAtTime(0.72, when);
+			const harmonicGain = context.createGain();
+			harmonicGain.gain.setValueAtTime(0.16, when);
+
+			const master = context.createGain();
+			master.gain.setValueAtTime(MIN_GAIN, when);
+			master.gain.exponentialRampToValueAtTime(
+				PEAK_GAIN,
+				when + ATTACK_SECONDS,
+			);
+			master.gain.setValueAtTime(
+				PEAK_GAIN,
+				Math.max(when + ATTACK_SECONDS, when + duration - 0.05),
+			);
+			master.gain.exponentialRampToValueAtTime(MIN_GAIN, when + duration);
+
+			const filter = context.createBiquadFilter();
+			filter.type = "lowpass";
+			filter.frequency.setValueAtTime(1450, when);
+			filter.Q.setValueAtTime(0.7, when);
+
+			fundamental.connect(fundamentalGain);
+			harmonic.connect(harmonicGain);
+			fundamentalGain.connect(master);
+			harmonicGain.connect(master);
+			master.connect(filter);
+			filter.connect(context.destination);
+
+			fundamental.start(when);
+			harmonic.start(when);
+			fundamental.stop(when + duration + 0.02);
+			harmonic.stop(when + duration + 0.02);
+
+			registerNodes(
+				[fundamental, harmonic, fundamentalGain, harmonicGain, master, filter],
+				fundamental,
+			);
 		},
-		[],
+		[registerNodes],
 	);
 
-	const scheduleScale = useCallback(
-		(ctx: AudioContext, frequencies: number[], fromIndex = 0) => {
-			const noteDuration = 60 / bpmRef.current;
-			const now = ctx.currentTime;
+	const createContinuousPattern = useCallback(
+		(
+			context: AudioContext,
+			frequencies: number[],
+			fromIndex: number,
+			when: number,
+			stepSeconds: number,
+		) => {
+			const remaining = frequencies.slice(fromIndex);
+			if (remaining.length === 0) return;
 
-			// Adjust start time so the visual indicator stays synced when resuming.
-			startTimeRef.current = now - fromIndex * (noteDuration + NOTE_GAP);
+			const fundamental = context.createOscillator();
+			fundamental.type = "triangle";
+			const harmonic = context.createOscillator();
+			harmonic.type = "sine";
 
-			frequencies.forEach((frequency, index) => {
+			fundamental.frequency.setValueAtTime(remaining[0], when);
+			harmonic.frequency.setValueAtTime(remaining[0] * 2, when);
+
+			remaining.slice(1).forEach((frequency, index) => {
+				const targetTime = when + (index + 1) * stepSeconds;
+				fundamental.frequency.exponentialRampToValueAtTime(frequency, targetTime);
+				harmonic.frequency.exponentialRampToValueAtTime(
+					frequency * 2,
+					targetTime,
+				);
+			});
+
+			const fundamentalGain = context.createGain();
+			fundamentalGain.gain.setValueAtTime(0.72, when);
+			const harmonicGain = context.createGain();
+			harmonicGain.gain.setValueAtTime(0.14, when);
+			const master = context.createGain();
+			const duration = Math.max(stepSeconds, remaining.length * stepSeconds);
+
+			master.gain.setValueAtTime(MIN_GAIN, when);
+			master.gain.exponentialRampToValueAtTime(
+				PEAK_GAIN,
+				when + ATTACK_SECONDS,
+			);
+			master.gain.setValueAtTime(
+				PEAK_GAIN,
+				Math.max(when + ATTACK_SECONDS, when + duration - 0.08),
+			);
+			master.gain.exponentialRampToValueAtTime(MIN_GAIN, when + duration);
+
+			const filter = context.createBiquadFilter();
+			filter.type = "lowpass";
+			filter.frequency.setValueAtTime(1550, when);
+
+			fundamental.connect(fundamentalGain);
+			harmonic.connect(harmonicGain);
+			fundamentalGain.connect(master);
+			harmonicGain.connect(master);
+			master.connect(filter);
+			filter.connect(context.destination);
+
+			fundamental.start(when);
+			harmonic.start(when);
+			fundamental.stop(when + duration + 0.02);
+			harmonic.stop(when + duration + 0.02);
+
+			registerNodes(
+				[fundamental, harmonic, fundamentalGain, harmonicGain, master, filter],
+				fundamental,
+			);
+		},
+		[registerNodes],
+	);
+
+	const schedulePattern = useCallback(
+		(context: AudioContext, pattern: ScalePattern, fromIndex = 0) => {
+			const timing = resolveTiming(pattern, bpmRef.current);
+			const startAt = context.currentTime + START_DELAY_SECONDS;
+			stepSecondsRef.current = timing.stepSeconds;
+			timelineStartRef.current = startAt - fromIndex * timing.stepSeconds;
+			currentIndexRef.current = fromIndex - 1;
+			setCurrentNoteIndex(fromIndex - 1);
+
+			if (timing.continuous) {
+				createContinuousPattern(
+					context,
+					pattern.frequencies,
+					fromIndex,
+					startAt,
+					timing.stepSeconds,
+				);
+				return;
+			}
+
+			pattern.frequencies.forEach((frequency, index) => {
 				if (index < fromIndex) return;
 				const offset = index - fromIndex;
-				const when = now + offset * (noteDuration + NOTE_GAP);
-				scheduleNote(ctx, frequency, when, noteDuration);
+				createTone(
+					context,
+					frequency,
+					startAt + offset * timing.stepSeconds,
+					timing.noteSeconds,
+				);
 			});
 		},
-		[scheduleNote],
+		[createContinuousPattern, createTone],
 	);
 
 	const tick = useCallback(() => {
-		const ctx = audioCtxRef.current;
-		const frequencies = frequenciesRef.current;
-		if (!ctx || frequencies.length === 0 || !isPlayingRef.current) return;
+		const context = audioContextRef.current;
+		const pattern = patternRef.current;
+		if (!context || !pattern || !isPlayingRef.current) return;
 
-		const now = ctx.currentTime;
-		const noteDuration = 60 / bpmRef.current;
-		const elapsed = now - startTimeRef.current;
-		const rawIndex = Math.floor(elapsed / (noteDuration + NOTE_GAP));
-		const index =
-			rawIndex >= 0 && rawIndex < frequencies.length ? rawIndex : -1;
+		const elapsed = context.currentTime - timelineStartRef.current;
+		const rawIndex = Math.floor(elapsed / stepSecondsRef.current);
+		const nextIndex =
+			rawIndex >= 0 && rawIndex < pattern.frequencies.length ? rawIndex : -1;
 
-		if (index !== currentNoteRef.current) {
-			currentNoteRef.current = index;
-			setCurrentNoteIndex(index);
+		if (nextIndex !== currentIndexRef.current) {
+			currentIndexRef.current = nextIndex;
+			setCurrentNoteIndex(nextIndex);
 		}
 
-		if (rawIndex >= frequencies.length) {
+		if (rawIndex >= pattern.frequencies.length) {
 			setIsPlaying(false);
 			setIsPaused(false);
-			currentNoteRef.current = -1;
+			currentIndexRef.current = -1;
 			setCurrentNoteIndex(-1);
 			return;
 		}
 
-		rafIdRef.current = requestAnimationFrame(tick);
+		frameRef.current = requestAnimationFrame(tick);
 	}, []);
 
 	useEffect(() => {
 		if (isPlaying) {
-			rafIdRef.current = requestAnimationFrame(tick);
+			frameRef.current = requestAnimationFrame(tick);
 		} else {
-			cancelRaf();
+			cancelAnimation();
 		}
-	}, [isPlaying, tick, cancelRaf]);
+	}, [cancelAnimation, isPlaying, tick]);
+
+	const ensureContext = useCallback(async () => {
+		const AudioContextClass =
+			window.AudioContext ||
+			(
+				window as unknown as {
+					webkitAudioContext?: typeof AudioContext;
+				}
+			).webkitAudioContext;
+
+		if (!AudioContextClass) return null;
+		if (!audioContextRef.current) {
+			audioContextRef.current = new AudioContextClass();
+		}
+		if (audioContextRef.current.state === "suspended") {
+			await audioContextRef.current.resume();
+		}
+		return audioContextRef.current;
+	}, []);
 
 	const startScale = useCallback(
-		async (frequencies: number[]) => {
-			const AudioContextClass =
-				window.AudioContext ||
-				(
-					window as unknown as {
-						webkitAudioContext?: typeof AudioContext;
-					}
-				).webkitAudioContext;
+		(patternInput: ScalePattern | number[]) => {
+			void (async () => {
+				const context = await ensureContext();
+				if (!context) return;
 
-			if (!AudioContextClass) return;
-
-			let ctx = audioCtxRef.current;
-			if (!ctx) {
-				ctx = new AudioContextClass();
-				audioCtxRef.current = ctx;
-			}
-
-			if (ctx.state === "suspended") {
-				await ctx.resume();
-			}
-
-			frequenciesRef.current = frequencies;
-			setIsPaused(false);
-			setIsPlaying(true);
-
-			const fromIndex = isPaused ? currentNoteRef.current + 1 : 0;
-			scheduleScale(ctx, frequencies, fromIndex);
+				disposeNodes();
+				const pattern = normalizePattern(patternInput);
+				patternRef.current = pattern;
+				setIsPaused(false);
+				setIsPlaying(true);
+				schedulePattern(context, pattern, 0);
+			})();
 		},
-		[isPaused, scheduleScale],
+		[disposeNodes, ensureContext, schedulePattern],
 	);
 
 	const pause = useCallback(() => {
-		disposeAllSounds();
-		const ctx = audioCtxRef.current;
-		if (ctx) {
-			ctx.suspend();
-		}
+		disposeNodes();
+		void audioContextRef.current?.suspend();
 		setIsPaused(true);
 		setIsPlaying(false);
-	}, [disposeAllSounds]);
+	}, [disposeNodes]);
 
-	const resume = useCallback(async () => {
-		const ctx = audioCtxRef.current;
-		if (!ctx) return;
-		await ctx.resume();
+	const resume = useCallback(() => {
+		void (async () => {
+			const context = await ensureContext();
+			const pattern = patternRef.current;
+			if (!context || !pattern) return;
 
-		const frequencies = frequenciesRef.current;
-		if (frequencies.length === 0) return;
+			const fromIndex = Math.max(0, currentIndexRef.current + 1);
+			if (fromIndex >= pattern.frequencies.length) {
+				schedulePattern(context, pattern, 0);
+			} else {
+				schedulePattern(context, pattern, fromIndex);
+			}
+			setIsPaused(false);
+			setIsPlaying(true);
+		})();
+	}, [ensureContext, schedulePattern]);
 
-		setIsPaused(false);
-		setIsPlaying(true);
-		scheduleScale(ctx, frequencies, currentNoteRef.current + 1);
-	}, [scheduleScale]);
+	const setBpm = useCallback(
+		(bpm: number) => {
+			const nextBpm = clampBpm(bpm);
+			bpmRef.current = nextBpm;
+			setCurrentBpm(nextBpm);
+
+			if (!isPlayingRef.current) return;
+			const pattern = patternRef.current;
+			const context = audioContextRef.current;
+			if (!pattern || !context) return;
+
+			const fromIndex = Math.max(0, currentIndexRef.current);
+			disposeNodes();
+			schedulePattern(context, pattern, fromIndex);
+		},
+		[disposeNodes, schedulePattern],
+	);
 
 	const stop = useCallback(() => {
-		disposeAllSounds();
-		const ctx = audioCtxRef.current;
-		if (ctx) {
-			ctx.close();
-			audioCtxRef.current = null;
-		}
-		frequenciesRef.current = [];
-		currentNoteRef.current = -1;
+		cancelAnimation();
+		disposeNodes();
+		const context = audioContextRef.current;
+		if (context) void context.close();
+		audioContextRef.current = null;
+		patternRef.current = null;
+		currentIndexRef.current = -1;
 		setCurrentNoteIndex(-1);
 		setIsPlaying(false);
 		setIsPaused(false);
-	}, [disposeAllSounds]);
+	}, [cancelAnimation, disposeNodes]);
 
-	useEffect(() => {
-		return () => {
-			stop();
-		};
-	}, [stop]);
-
-	const setBpm = useCallback((bpm: number) => {
-		setCurrentBpm(Math.max(40, Math.min(208, bpm)));
-	}, []);
+	useEffect(() => stop, [stop]);
 
 	return {
 		isPlaying,
+		isPaused,
 		currentNoteIndex,
 		currentBpm,
 		setBpm,

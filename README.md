@@ -1,32 +1,86 @@
-# React + TypeScript + Vite
+# CantoCoach
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+CantoCoach es un entrenador vocal web local-first. La aplicación actual organiza rutinas, reproduce referencias, registra sesiones y adapta el trabajo según el perfil y el reporte del usuario.
 
-Currently, two official plugins are available:
+El objetivo del MVP técnico es evolucionar ese flujo hacia:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+> escuchar referencia → cantar → medir → corregir → repetir → adaptar.
 
-## React Compiler
+## Estado
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+La aplicación se encuentra en desarrollo activo. La especificación que gobierna la evolución está en [`docs/sdd/README.md`](docs/sdd/README.md).
 
-## Expanding the Oxlint configuration
+La primera modalidad soportada está optimizada para barítono. El producto no realiza diagnósticos médicos ni sustituye a un profesor, foniatra u otorrinolaringólogo.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Stack
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS
+- Web Audio API
+- Persistencia local en el navegador
+
+## Requisitos
+
+- Node.js 22 o una versión compatible con Vite 8
+- npm
+- Navegador moderno
+
+## Desarrollo
+
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Verificaciones
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+## Estructura actual
+
+```text
+src/
+  components/       interfaz existente
+  data/             ejercicios y base de conocimiento
+  domain/           reglas puras de seguridad y progreso
+  hooks/            estado y audio
+  services/         generación de rutina y feedback
+  types/            contratos centrales
+  utils/            fechas y utilidades compartidas
+
+docs/sdd/           especificación del producto
+services/           servicios opcionales, como notificaciones
+```
+
+## Principios
+
+- Seguridad antes que adherencia.
+- No diagnosticar.
+- Separar métricas acústicas de autopercepción.
+- Dar una corrección principal por intento.
+- Derivar progreso desde sesiones reales.
+- Procesar audio localmente por defecto.
+- Negarse a puntuar cuando la señal no sea confiable.
+
+## Roadmap resumido
+
+1. Saneamiento, seguridad, fechas y progreso.
+2. Motor de audio correcto.
+3. Micrófono y detección monofónica de pitch.
+4. Métricas de ataque, afinación, estabilidad y final.
+5. Línea base y plan adaptativo de ocho semanas.
+6. Transferencia a repertorio y reevaluación.
+
+## Privacidad
+
+El MVP se diseña para procesar audio en el dispositivo. Guardar grabaciones será opcional; las métricas podrán persistirse sin conservar el audio completo.
+
+## Inspiración pedagógica
+
+El producto toma inspiración de enfoques prácticos de técnica vocal, incluido el contenido de AREH, pero redacta su propio material y trata los cues como herramientas pedagógicas, no como diagnósticos anatómicos.

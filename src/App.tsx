@@ -1,5 +1,5 @@
-import { Dashboard } from "./components/Dashboard";
+import { SafetyGate } from "./components/SafetyGate";
 
 export default function App() {
-  return <Dashboard />;
+  return <SafetyGate />;
 }
