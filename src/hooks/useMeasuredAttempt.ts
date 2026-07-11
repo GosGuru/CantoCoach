@@ -214,7 +214,6 @@ export function useMeasuredAttempt(
 							noiseSuppression: { ideal: false },
 							autoGainControl: { ideal: true },
 							channelCount: { ideal: 1 },
-							latency: { ideal: 0.02 },
 						},
 					});
 				} catch (constraintError) {
