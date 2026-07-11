@@ -1,4 +1,5 @@
 import { vocalExercises } from "../data/vocalExercises";
+import { isExerciseUnlockedByEvidence } from "../domain/progression/prerequisiteEvidence.ts";
 import type { Exercise, VoiceBlock } from "../types/vocal";
 import type {
 	CoachFeedback,
@@ -38,25 +39,6 @@ function levelCap(level: VocalProfile["level"]): number {
 	}
 }
 
-function getProgressionEligibleIds(
-	recentSessions?: SessionRecord[],
-): Set<string> {
-	const ids = new Set<string>();
-	for (const session of recentSessions ?? []) {
-		for (const id of session.progressionEligibleExerciseIds ?? []) ids.add(id);
-	}
-	return ids;
-}
-
-function prerequisitesCovered(
-	exercise: Exercise,
-	recentSessions?: SessionRecord[],
-): boolean {
-	if (!exercise.prerequisites || exercise.prerequisites.length === 0) return true;
-	const eligible = getProgressionEligibleIds(recentSessions);
-	return exercise.prerequisites.every((id) => eligible.has(id));
-}
-
 function exerciseAllowedForProfile(
 	exercise: Exercise,
 	profile: VocalProfile,
@@ -64,10 +46,15 @@ function exerciseAllowedForProfile(
 	extraCap?: number,
 ): boolean {
 	const cap = extraCap ?? levelCap(profile.level);
-	if ((exercise.progressionLevel ?? 1) > cap) return false;
+	const level = exercise.progressionLevel ?? 1;
+	if (level > cap) return false;
 	if (
-		(exercise.progressionLevel ?? 1) >= 4 &&
-		!prerequisitesCovered(exercise, recentSessions)
+		level > 1 &&
+		!isExerciseUnlockedByEvidence(
+			exercise,
+			vocalExercises,
+			recentSessions ?? [],
+		)
 	) {
 		return false;
 	}
@@ -209,7 +196,7 @@ export function generateRoutine(
 		date,
 		chosen,
 		`Rutina ${goalLabel} para ${voiceType}, nivel ${profile.level}`,
-		`Objetivos priorizados: ${profile.goals.join(", ")}. Los requisitos avanzados solo se desbloquean con evidencia medida elegible.`,
+		`Objetivos priorizados: ${profile.goals.join(", ")}. Cada nivel superior requiere evidencia medida del nivel anterior dentro del mismo bloque.`,
 	);
 }
 
