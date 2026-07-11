@@ -1,15 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { PracticeSessionRecord } from "../types/attempt.ts";
-import { getLocalDateKey } from "../utils/localDate.ts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createPracticeSession,
+	finalizePracticeSession,
+	registerSessionAttempt,
+} from "../domain/practice/sessionLifecycle.ts";
+import type { ExercisePrescription } from "../domain/practice/prescription.ts";
+import type {
+	ExerciseAttemptRecord,
+	ExerciseCompletionMode,
+	PracticeSessionRecord,
+} from "../types/attempt.ts";
 import { useLocalStorage } from "./useLocalStorage";
 
-const PRACTICE_SESSIONS_STORAGE_KEY = "vocalgym-practice-sessions-v2";
+export const PRACTICE_SESSIONS_STORAGE_KEY = "vocalgym-practice-sessions-v2";
 
-type FinalStatus = Exclude<PracticeSessionRecord["status"], "active">;
-
-/** Internal foundation; wire it into FocusPlayer only with attempt linkage. */
-export function usePracticeSession(exerciseId: string) {
-	const [, setSessions] = useLocalStorage<PracticeSessionRecord[]>(
+export function usePracticeSession(
+	exerciseId: string,
+	prescription: ExercisePrescription,
+) {
+	const [sessions, setSessions] = useLocalStorage<PracticeSessionRecord[]>(
 		PRACTICE_SESSIONS_STORAGE_KEY,
 		[],
 	);
@@ -17,31 +26,27 @@ export function usePracticeSession(exerciseId: string) {
 	const statusRef = useRef<PracticeSessionRecord["status"]>("active");
 
 	useEffect(() => {
-		const startedAt = new Date().toISOString();
 		setSessions((current) => {
 			if (current.some((session) => session.id === sessionId)) return current;
 			return [
 				...current,
-				{
-					id: sessionId,
-					version: 1,
-					exerciseId,
-					localDate: getLocalDateKey(),
-					startedAt,
-					attemptIds: [],
-					status: "active",
-				},
+				createPracticeSession(exerciseId, prescription, new Date(), sessionId),
 			];
 		});
-	}, [exerciseId, sessionId, setSessions]);
+	}, [exerciseId, prescription, sessionId, setSessions]);
+
+	const session = useMemo(
+		() => sessions.find((item) => item.id === sessionId) ?? null,
+		[sessionId, sessions],
+	);
 
 	const registerAttempt = useCallback(
-		(attemptId: string) => {
+		(attempt: ExerciseAttemptRecord) => {
 			setSessions((current) =>
-				current.map((session) =>
-					session.id === sessionId && !session.attemptIds.includes(attemptId)
-						? { ...session, attemptIds: [...session.attemptIds, attemptId] }
-						: session,
+				current.map((item) =>
+					item.id === sessionId
+						? registerSessionAttempt(item, attempt.id, attempt.metrics.evaluable)
+						: item,
 				),
 			);
 		},
@@ -50,39 +55,50 @@ export function usePracticeSession(exerciseId: string) {
 
 	const finalize = useCallback(
 		(
-			status: FinalStatus,
+			status: Exclude<PracticeSessionRecord["status"], "active">,
+			mode: ExerciseCompletionMode | null,
 			interruptionReason?: PracticeSessionRecord["interruptionReason"],
 		) => {
 			statusRef.current = status;
 			setSessions((current) =>
-				current.map((session) =>
-					session.id === sessionId
-						? {
-								...session,
+				current.map((item) =>
+					item.id === sessionId
+						? finalizePracticeSession(
+								item,
 								status,
-								endedAt: new Date().toISOString(),
+								mode,
+								new Date(),
 								interruptionReason,
-							}
-						: session,
+							)
+						: item,
 				),
 			);
 		},
 		[sessionId, setSessions],
 	);
 
-	const complete = useCallback(() => finalize("completed"), [finalize]);
+	const completeMeasured = useCallback(
+		() => finalize("completed", "measured"),
+		[finalize],
+	);
+	const completeManual = useCallback(
+		() => finalize("completed", "manual-unscored"),
+		[finalize],
+	);
 	const closePartial = useCallback(() => {
-		if (statusRef.current === "active") finalize("partial", "user");
+		if (statusRef.current === "active") finalize("partial", null, "user");
 	}, [finalize]);
 	const interruptForDiscomfort = useCallback(
-		() => finalize("interrupted", "discomfort"),
+		() => finalize("interrupted", null, "discomfort"),
 		[finalize],
 	);
 
 	return {
 		sessionId,
+		session,
 		registerAttempt,
-		complete,
+		completeMeasured,
+		completeManual,
 		closePartial,
 		interruptForDiscomfort,
 	};
