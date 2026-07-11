@@ -6,7 +6,7 @@ La suite se ejecuta con:
 npm run test
 ```
 
-Actualmente cubre 27 casos:
+Actualmente cubre 30 casos:
 
 - conversión frecuencia, MIDI y cents;
 - detección YIN de A4 y G3;
@@ -28,6 +28,9 @@ Actualmente cubre 27 casos:
 - interrupción por molestia;
 - gates de progresión por cantidad y calidad;
 - retención de nivel cuando el ataque no cumple;
-- rechazo de capturas con clipping, baja confianza o poca voz.
+- rechazo de capturas con clipping, baja confianza o poca voz;
+- nivel inicial desbloqueado por defecto;
+- práctica manual incapaz de desbloquear niveles;
+- evidencia medida habilitando el nivel siguiente.
 
 Estas pruebas validan funciones puras y señales sintéticas. No sustituyen las pruebas manuales del micrófono real, Safari iPhone ni el build completo de la aplicación.
