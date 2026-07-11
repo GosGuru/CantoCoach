@@ -1,4 +1,7 @@
-import type { PitchAttemptMetrics, PitchObservation } from "../audio/analysis/attemptMetrics.ts";
+import type {
+	PitchAttemptMetrics,
+	PitchObservation,
+} from "../audio/analysis/attemptMetrics.ts";
 import type { TechnicalFeedback } from "../audio/analysis/technicalFeedback.ts";
 
 export interface AttemptTarget {
@@ -16,6 +19,7 @@ export interface CaptureQuality {
 export interface ExerciseAttemptRecord {
 	id: string;
 	version: 1;
+	practiceSessionId: string;
 	exerciseId: string;
 	localDate: string;
 	createdAt: string;
@@ -27,4 +31,16 @@ export interface ExerciseAttemptRecord {
 	captureQuality: CaptureQuality;
 	completionMode: "measured";
 	previousAttemptId?: string;
+}
+
+export interface PracticeSessionRecord {
+	id: string;
+	version: 1;
+	exerciseId: string;
+	localDate: string;
+	startedAt: string;
+	endedAt?: string;
+	attemptIds: string[];
+	status: "active" | "partial" | "completed" | "interrupted";
+	interruptionReason?: "discomfort" | "user" | "technical";
 }
