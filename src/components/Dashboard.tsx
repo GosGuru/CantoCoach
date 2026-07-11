@@ -181,26 +181,42 @@ export function Dashboard() {
 
 	const handleReportSubmit = (report: DailyReportInput) => {
 		const activeProfile = profile ?? DEFAULT_PROFILE;
-		const result = analyzeDailyReport(report, activeProfile, sessions);
+		const progressionEligibleExerciseIds = completedIds.filter(
+			(exerciseId) =>
+				latestCompletionByExercise.get(exerciseId)?.progressionEligible === true,
+		);
 		const totalMinutes = completedIds.reduce(
 			(sum, id) => sum + (vocalExerciseById(id)?.durationMinutes ?? 0),
 			0,
 		);
-
-		const newSession: SessionRecord = {
+		const preliminaryFeedback = analyzeDailyReport(
+			report,
+			activeProfile,
+			sessions,
+		);
+		const baseSession: SessionRecord = {
 			id: crypto.randomUUID(),
 			date: report.date,
 			routine,
 			completedExerciseIds: [...completedIds],
+			progressionEligibleExerciseIds,
 			report,
-			feedback: result,
+			feedback: preliminaryFeedback,
 			totalMinutes,
 		};
+		const otherDays = sessions.filter((session) => session.date !== report.date);
+		const sessionsWithCurrentEvidence = [...otherDays, baseSession];
+		const result = analyzeDailyReport(
+			report,
+			activeProfile,
+			sessionsWithCurrentEvidence,
+		);
+		const finalSession: SessionRecord = {
+			...baseSession,
+			feedback: result,
+		};
 
-		setSessions((previous) => {
-			const otherDays = previous.filter((session) => session.date !== report.date);
-			return [...otherDays, newSession];
-		});
+		setSessions([...otherDays, finalSession]);
 		setFeedback(result);
 		setRoutine(result.nextRoutine);
 		clearRoutineCompletion();
@@ -294,12 +310,32 @@ export function Dashboard() {
 							<MetricCard
 								icon={Calendar}
 								label="Hoy"
-								value={<>{routine.totalMinutes} <span className="text-base text-text-muted">min</span></>}
+								value={
+									<>
+										{routine.totalMinutes}{" "}
+										<span className="text-base text-text-muted">min</span>
+									</>
+								}
 								accent="text-accent"
 							/>
-							<MetricCard icon={Dumbbell} label="Rutina" value={routineExercises.length} accent="text-sky" />
-							<MetricCard icon={TrendingUp} label="Completado" value={`${completionRate}%`} accent="text-emerald" />
-							<MetricCard icon={Flame} label="Racha" value={`${streak} días`} accent="text-gold" />
+							<MetricCard
+								icon={Dumbbell}
+								label="Rutina"
+								value={routineExercises.length}
+								accent="text-sky"
+							/>
+							<MetricCard
+								icon={TrendingUp}
+								label="Completado"
+								value={`${completionRate}%`}
+								accent="text-emerald"
+							/>
+							<MetricCard
+								icon={Flame}
+								label="Racha"
+								value={`${streak} días`}
+								accent="text-gold"
+							/>
 						</section>
 
 						<section className="glass-panel rounded-xl p-5 sm:p-6">
@@ -352,7 +388,9 @@ export function Dashboard() {
 							{routineExercises.length === 0 && (
 								<div className="text-center py-10">
 									<Award className="w-7 h-7 text-text-subtle mx-auto mb-3" aria-hidden="true" />
-									<p className="text-sm text-text-muted">No hay ejercicios vocales asignados.</p>
+									<p className="text-sm text-text-muted">
+										No hay ejercicios vocales asignados.
+									</p>
 								</div>
 							)}
 						</section>
@@ -365,11 +403,15 @@ export function Dashboard() {
 						{feedback && (
 							<section className="glass-panel rounded-xl p-5 sm:p-6 border-l-4 border-accent">
 								<h2 className="section-title mb-2">Feedback del coach</h2>
-								<p className="text-sm text-text-muted leading-relaxed">{feedback.summary}</p>
+								<p className="text-sm text-text-muted leading-relaxed">
+									{feedback.summary}
+								</p>
 								<p className="text-sm text-text mt-3 font-medium p-3 rounded-lg bg-surface/60 border border-border">
 									{feedback.recommendation}
 								</p>
-								<p className="text-sm text-accent mt-4 italic">{feedback.closingPhrase}</p>
+								<p className="text-sm text-accent mt-4 italic">
+									{feedback.closingPhrase}
+								</p>
 							</section>
 						)}
 					</>
