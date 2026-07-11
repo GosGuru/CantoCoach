@@ -1,3 +1,0 @@
-interface MediaTrackConstraints {
-	latency?: ConstrainDouble;
-}
