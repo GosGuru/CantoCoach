@@ -1,0 +1,22 @@
+{
+  "name": "vocalgym-whatsapp-notifier",
+  "version": "0.0.1",
+  "description": "Servicio de notificaciones WhatsApp para VocalGym",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "node-cron": "^3.0.3",
+    "zod": "^3.25.3"
+  },
+  "devDependencies": {
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.3"
+  }
+}
