@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { analyzePitchAttempt, type PitchObservation } from "../audio/analysis/attemptMetrics.ts";
+import {
+	analyzePitchAttempt,
+	type PitchObservation,
+} from "../audio/analysis/attemptMetrics.ts";
 import { buildTechnicalFeedback } from "../audio/analysis/technicalFeedback.ts";
 import { frequencyToNearestNote, median } from "../audio/pitch/pitchMath.ts";
 import { detectPitchYin } from "../audio/pitch/yin.ts";
@@ -62,6 +65,7 @@ function isClipped(buffer: Float32Array): boolean {
 
 export function useMeasuredAttempt(
 	exerciseId: string,
+	practiceSessionId: string,
 	durationMs = 3200,
 ): UseMeasuredAttemptReturn {
 	const [status, setStatus] = useState<MeasuredAttemptStatus>("idle");
@@ -205,6 +209,7 @@ export function useMeasuredAttempt(
 					const record: ExerciseAttemptRecord = {
 						id: crypto.randomUUID(),
 						version: 1,
+						practiceSessionId,
 						exerciseId,
 						localDate: getLocalDateKey(),
 						createdAt: new Date().toISOString(),
@@ -322,7 +327,14 @@ export function useMeasuredAttempt(
 				);
 			}
 		},
-		[durationMs, exerciseId, isSupported, releaseResources, updateStatus],
+		[
+			durationMs,
+			exerciseId,
+			isSupported,
+			practiceSessionId,
+			releaseResources,
+			updateStatus,
+		],
 	);
 
 	useEffect(() => {
