@@ -19,18 +19,37 @@ export interface ScalePattern {
 	defaultBpm: number;
 	// Frequencies in Hz for each note of the pattern, in order.
 	frequencies: number[];
-	// Optional note names for display (e.g., ['G3', 'A3', 'B3', 'C4', 'B3', 'A3', 'G3']).
+	// Optional note names for display (e.g., ['G3', 'A3', 'B3', 'C4']).
 	noteNames?: string[];
+}
+
+export interface ExerciseGuidance {
+	objective: string;
+	setup: string[];
+	execution: string[];
+	commonMistakes: string[];
+	stopSignals?: string[];
+}
+
+export interface ExerciseResource {
+	title: string;
+	url: string;
+	kind: "video" | "article" | "source";
+	sourceLabel: string;
 }
 
 export interface Exercise {
 	id: string;
 	name: string;
 	block: VoiceBlock;
-	// Short, direct anatomical instructions for the exercise.
+	// Short cues displayed while practicing.
 	instructions: string[];
-	// Physical sensations the user should verify while practicing.
+	// Physical sensations the user can report while practicing.
 	autochecks: string[];
+	// Optional step-by-step explanation for exercises that are hard to infer from a cue.
+	guidance?: ExerciseGuidance;
+	// Optional external demonstrations or reading. Links never replace the safety gate.
+	resources?: ExerciseResource[];
 	scalePattern: ScalePattern;
 	// Approximate duration in minutes.
 	durationMinutes: number;

@@ -4,12 +4,16 @@ import {
 	Check,
 	ChevronLeft,
 	Clock,
+	KeyboardMusic,
 	ListChecks,
+	LoaderCircle,
 	Music,
 	Pause,
 	Play,
 	Square,
+	Waves,
 } from "lucide-react";
+import { PIANO_SAMPLE_ATTRIBUTION } from "../audio/synthesis/pianoSampler.ts";
 import {
 	resolveExercisePrescription,
 	totalPrescriptionRepetitions,
@@ -25,6 +29,7 @@ import type {
 } from "../types/attempt.ts";
 import type { Exercise, VoiceBlock } from "../types/vocal";
 import { getLocalDateKey } from "../utils/localDate.ts";
+import { ExerciseLearningPanel } from "./ExerciseLearningPanel.tsx";
 import { MeasuredAttemptPanel } from "./MeasuredAttemptPanel";
 import { ProgressionSummary } from "./ProgressionSummary";
 
@@ -86,8 +91,11 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	} = usePracticeSession(exercise.id, prescription);
 	const {
 		isPlaying,
+		isLoading,
 		currentNoteIndex,
 		currentBpm,
+		timbre,
+		setTimbre,
 		setBpm,
 		startScale,
 		pause,
@@ -149,14 +157,14 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	const handlePlayPause = () => {
 		if (isPlaying) pause();
 		else if (currentNoteIndex >= 0) resume();
-		else startScale(exercise.scalePattern);
+		else void startScale(exercise.scalePattern);
 	};
 
-	const handlePlayTarget = (target: AttemptTarget) => {
+	const handlePlayTarget = async (target: AttemptTarget): Promise<void> => {
 		stop();
-		startScale({
+		await startScale({
 			type: "sustained",
-			defaultBpm: 60,
+			defaultBpm: 58,
 			frequencies: [target.frequencyHz],
 			noteNames: [target.noteName],
 		});
@@ -212,6 +220,11 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 		onClose();
 		window.setTimeout(() => window.location.reload(), 0);
 	};
+
+	const referenceBusy = isPlaying || isLoading;
+	const continuousPattern = ["sirens", "octave-slide"].includes(
+		exercise.scalePattern.type,
+	);
 
 	return (
 		<div className="fixed inset-0 z-50 flex flex-col bg-canvas">
@@ -283,14 +296,20 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 						</div>
 					</section>
 
-					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border space-y-4">
-						<div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border space-y-5">
+						<div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
 							<button
 								type="button"
+								disabled={isLoading}
 								onClick={handlePlayPause}
-								className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl btn-primary text-base font-semibold"
+								className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl btn-primary text-base font-semibold disabled:opacity-60"
 							>
-								{isPlaying ? (
+								{isLoading ? (
+									<>
+										<LoaderCircle className="w-5 h-5 animate-spin" aria-hidden="true" />
+										Cargando piano…
+									</>
+								) : isPlaying ? (
 									<>
 										<Pause className="w-5 h-5" aria-hidden="true" /> Pausar
 									</>
@@ -306,8 +325,9 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 									<button
 										key={option.label}
 										type="button"
+										disabled={isLoading}
 										onClick={() => setBpm(option.bpm)}
-										className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+										className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
 											currentBpm === option.bpm
 												? "bg-accent text-accent-foreground"
 												: "bg-surface text-text-muted border border-border hover:text-text"
@@ -318,6 +338,58 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 								))}
 							</div>
 						</div>
+
+						<div>
+							<p className="text-xs uppercase tracking-wider text-text-subtle mb-2">
+								Sonido de referencia
+							</p>
+							<div className="grid grid-cols-2 gap-2">
+								<button
+									type="button"
+									disabled={referenceBusy || continuousPattern}
+									onClick={() => setTimbre("piano")}
+									className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-3 text-sm font-medium disabled:opacity-45 ${
+										timbre === "piano"
+											? "border-accent bg-accent/10 text-text"
+											: "border-border bg-surface text-text-muted"
+									}`}
+								>
+									<KeyboardMusic className="w-4 h-4" aria-hidden="true" />
+									Piano real
+								</button>
+								<button
+									type="button"
+									disabled={referenceBusy}
+									onClick={() => setTimbre("guide")}
+									className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-3 text-sm font-medium disabled:opacity-45 ${
+										timbre === "guide" || continuousPattern
+											? "border-sky bg-sky/10 text-text"
+											: "border-border bg-surface text-text-muted"
+									}`}
+								>
+									<Waves className="w-4 h-4" aria-hidden="true" />
+									Guía sostenida
+								</button>
+							</div>
+							<p className="text-xs text-text-subtle mt-2 leading-relaxed">
+								{continuousPattern
+									? "Las sirenas y los slides usan guía continua para que el tono pueda desplazarse sin cortes."
+									: "El piano usa muestras reales. La guía sostenida sirve cuando necesitás oír el centro durante más tiempo."}
+							</p>
+							{timbre === "piano" && !continuousPattern && (
+								<p className="text-[11px] text-text-subtle mt-2">
+									Muestras: {PIANO_SAMPLE_ATTRIBUTION.instrument} ·{" "}
+									<a
+										href={PIANO_SAMPLE_ATTRIBUTION.sourceUrl}
+										target="_blank"
+										rel="noreferrer"
+										className="underline hover:text-text"
+									>
+										{PIANO_SAMPLE_ATTRIBUTION.license}
+									</a>
+								</p>
+							)}
+						</div>
 					</section>
 
 					<MeasuredAttemptPanel
@@ -325,32 +397,17 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 						practiceSessionId={sessionId}
 						prescription={prescription}
 						completedRepetitions={completedRepetitions}
-						referencePlaying={isPlaying}
+						referencePlaying={referenceBusy}
 						onPlayTarget={handlePlayTarget}
 						onAttemptRecorded={handleAttemptRecorded}
 					/>
 
 					<ProgressionSummary result={progression} />
 
-					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
-						<h2 className="section-title mb-4">Instrucciones</h2>
-						<ul className="space-y-3">
-							{exercise.instructions.map((instruction, index) => (
-								<li
-									key={instruction}
-									className={`p-4 rounded-xl border ${
-										index === focusInstruction
-											? "bg-accent/8 border-accent/30"
-											: "bg-surface/40 border-border"
-									}`}
-								>
-									<p className="text-sm sm:text-base text-text leading-relaxed">
-										{instruction}
-									</p>
-								</li>
-							))}
-						</ul>
-					</section>
+					<ExerciseLearningPanel
+						exercise={exercise}
+						focusInstruction={focusInstruction}
+					/>
 
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
 						<div className="flex items-center gap-2 mb-2">
@@ -372,7 +429,13 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 												onChange={() => toggleAutocheck(item)}
 												className="sr-only"
 											/>
-											<span className={`w-5 h-5 rounded-md border flex items-center justify-center ${checked ? "bg-emerald border-emerald" : "bg-surface border-text-subtle"}`}>
+											<span
+												className={`w-5 h-5 rounded-md border flex items-center justify-center ${
+													checked
+														? "bg-emerald border-emerald"
+														: "bg-surface border-text-subtle"
+												}`}
+											>
 												{checked && <Check className="w-3.5 h-3.5 text-ink" />}
 											</span>
 											<span className="text-sm text-text-muted">{item}</span>

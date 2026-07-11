@@ -3,6 +3,7 @@ import {
 	AlertTriangle,
 	BarChart3,
 	CheckCircle2,
+	Clock3,
 	Headphones,
 	Mic2,
 	Play,
@@ -27,12 +28,13 @@ interface MeasuredAttemptPanelProps {
 	prescription: ExercisePrescription;
 	completedRepetitions: number;
 	referencePlaying: boolean;
-	onPlayTarget: (target: AttemptTarget) => void;
+	onPlayTarget: (target: AttemptTarget) => Promise<void>;
 	onAttemptRecorded: (attempt: ExerciseAttemptRecord) => void;
 }
 
 const ATTEMPTS_STORAGE_KEY = "vocalgym-attempts-v1";
-const REFERENCE_WAIT_MS = 1650;
+const POST_REFERENCE_SILENCE_MS = 450;
+const DURATION_OPTIONS_MS = [4000, 6000, 8000] as const;
 
 function uniqueTargets(exercise: Exercise): AttemptTarget[] {
 	const targets = new Map<string, AttemptTarget>();
@@ -61,6 +63,10 @@ function isActiveStatus(status: ReturnType<typeof useMeasuredAttempt>["status"])
 	);
 }
 
+function delay(milliseconds: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 export function MeasuredAttemptPanel({
 	exercise,
 	practiceSessionId,
@@ -74,16 +80,20 @@ export function MeasuredAttemptPanel({
 	const [selectedIndex, setSelectedIndex] = useState(() =>
 		Math.floor(Math.max(0, targets.length - 1) / 2),
 	);
+	const initialDuration = Math.max(6000, prescription.noteDurationMs);
+	const [captureDurationMs, setCaptureDurationMs] = useState(initialDuration);
+	const [guidedStarting, setGuidedStarting] = useState(false);
 	const [attempts, setAttempts] = useLocalStorage<ExerciseAttemptRecord[]>(
 		ATTEMPTS_STORAGE_KEY,
 		[],
 	);
 	const reportedResultIds = useRef(new Set<string>());
-	const guidedTimerRef = useRef<number | null>(null);
+	const guidedTokenRef = useRef(0);
 	const {
 		status,
 		countdown,
 		progress,
+		hasVoiceStarted,
 		reading,
 		result,
 		errorMessage,
@@ -91,14 +101,10 @@ export function MeasuredAttemptPanel({
 		start,
 		cancel,
 		reset,
-	} = useMeasuredAttempt(
-		exercise.id,
-		practiceSessionId,
-		prescription.noteDurationMs,
-	);
+	} = useMeasuredAttempt(exercise.id, practiceSessionId, captureDurationMs);
 
 	const target = targets[selectedIndex] ?? targets[0];
-	const active = isActiveStatus(status);
+	const active = isActiveStatus(status) || guidedStarting;
 	const position = prescriptionPosition(completedRepetitions, prescription);
 	const totalRepetitions = totalPrescriptionRepetitions(prescription);
 
@@ -135,19 +141,20 @@ export function MeasuredAttemptPanel({
 	}, [onAttemptRecorded, result, setAttempts]);
 
 	useEffect(() => {
-		if (referencePlaying && active) cancel();
-	}, [active, cancel, referencePlaying]);
+		if (referencePlaying && isActiveStatus(status)) cancel();
+	}, [cancel, referencePlaying, status]);
 
 	useEffect(() => {
+		guidedTokenRef.current += 1;
 		reset();
+		setGuidedStarting(false);
 		setSelectedIndex(Math.floor(Math.max(0, targets.length - 1) / 2));
-	}, [exercise.id, reset, targets.length]);
+		setCaptureDurationMs(Math.max(6000, prescription.noteDurationMs));
+	}, [exercise.id, prescription.noteDurationMs, reset, targets.length]);
 
 	useEffect(
 		() => () => {
-			if (guidedTimerRef.current !== null) {
-				window.clearTimeout(guidedTimerRef.current);
-			}
+			guidedTokenRef.current += 1;
 		},
 		[],
 	);
@@ -166,19 +173,33 @@ export function MeasuredAttemptPanel({
 		void start({ target, previousAttemptId });
 	};
 
-	const startGuidedAttempt = (previousAttemptId = previousAttempt?.id) => {
-		if (guidedTimerRef.current !== null) {
-			window.clearTimeout(guidedTimerRef.current);
-		}
+	const startGuidedAttempt = async (
+		previousAttemptId = previousAttempt?.id,
+	): Promise<void> => {
+		const token = guidedTokenRef.current + 1;
+		guidedTokenRef.current = token;
 		reset();
-		onPlayTarget(target);
-		guidedTimerRef.current = window.setTimeout(() => {
-			guidedTimerRef.current = null;
-			void start({ target, previousAttemptId });
-		}, REFERENCE_WAIT_MS);
+		setGuidedStarting(true);
+		try {
+			await onPlayTarget(target);
+			if (guidedTokenRef.current !== token) return;
+			await delay(POST_REFERENCE_SILENCE_MS);
+			if (guidedTokenRef.current !== token) return;
+			await start({ target, previousAttemptId });
+		} finally {
+			if (guidedTokenRef.current === token) setGuidedStarting(false);
+		}
 	};
 
-	const retryAttempt = () => startGuidedAttempt(result?.id);
+	const cancelEverything = () => {
+		guidedTokenRef.current += 1;
+		setGuidedStarting(false);
+		cancel();
+	};
+
+	const retryAttempt = () => {
+		void startGuidedAttempt(result?.id);
+	};
 	const prescriptionProgress = Math.min(
 		100,
 		Math.round((completedRepetitions / totalRepetitions) * 100),
@@ -193,8 +214,8 @@ export function MeasuredAttemptPanel({
 				<div className="min-w-0 flex-1">
 					<h2 className="section-title">Práctica prescrita</h2>
 					<p className="text-sm text-text-muted mt-1 leading-relaxed">
-						{prescription.sets} series × {prescription.repetitionsPerSet} repeticiones ·{" "}
-						{(prescription.noteDurationMs / 1000).toFixed(1)} s por intento.
+						{prescription.sets} series × {prescription.repetitionsPerSet} repeticiones.
+						El tiempo comienza cuando la app detecta que realmente empezaste a cantar.
 					</p>
 				</div>
 			</header>
@@ -218,29 +239,58 @@ export function MeasuredAttemptPanel({
 				</div>
 			</div>
 
-			<div className="mt-5">
-				<p className="text-xs uppercase tracking-wider text-text-subtle mb-2">
-					Nota objetivo
-				</p>
-				<div className="flex flex-wrap gap-2">
-					{targets.map((item, index) => (
-						<button
-							key={`${item.frequencyHz}-${item.noteName}`}
-							type="button"
-							disabled={active || position.complete}
-							onClick={() => {
-								reset();
-								setSelectedIndex(index);
-							}}
-							className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 ${
-								index === selectedIndex
-									? "border-accent bg-accent/10 text-text"
-									: "border-border bg-surface text-text-muted hover:text-text"
-							}`}
-						>
-							{item.noteName}
-						</button>
-					))}
+			<div className="mt-5 grid gap-4 sm:grid-cols-2">
+				<div>
+					<p className="text-xs uppercase tracking-wider text-text-subtle mb-2">
+						Nota objetivo
+					</p>
+					<div className="flex flex-wrap gap-2">
+						{targets.map((item, index) => (
+							<button
+								key={`${item.frequencyHz}-${item.noteName}`}
+								type="button"
+								disabled={active || position.complete}
+								onClick={() => {
+									reset();
+									setSelectedIndex(index);
+								}}
+								className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 ${
+									index === selectedIndex
+										? "border-accent bg-accent/10 text-text"
+										: "border-border bg-surface text-text-muted hover:text-text"
+								}`}
+							>
+								{item.noteName}
+							</button>
+						))}
+					</div>
+				</div>
+
+				<div>
+					<p className="text-xs uppercase tracking-wider text-text-subtle mb-2 flex items-center gap-1.5">
+						<Clock3 className="w-3.5 h-3.5" aria-hidden="true" />
+						Duración después de detectar tu voz
+					</p>
+					<div className="flex flex-wrap gap-2">
+						{DURATION_OPTIONS_MS.map((milliseconds) => (
+							<button
+								key={milliseconds}
+								type="button"
+								disabled={active || position.complete}
+								onClick={() => {
+									reset();
+									setCaptureDurationMs(milliseconds);
+								}}
+								className={`px-3 py-2 rounded-lg border text-sm font-medium disabled:opacity-50 ${
+									captureDurationMs === milliseconds
+										? "border-emerald bg-emerald/10 text-text"
+										: "border-border bg-surface text-text-muted hover:text-text"
+								}`}
+							>
+								{milliseconds / 1000} s
+							</button>
+						))}
+					</div>
 				</div>
 			</div>
 
@@ -248,7 +298,7 @@ export function MeasuredAttemptPanel({
 				<button
 					type="button"
 					disabled={active || referencePlaying || position.complete}
-					onClick={() => onPlayTarget(target)}
+					onClick={() => void onPlayTarget(target)}
 					className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary disabled:opacity-50"
 				>
 					<Play className="w-4 h-4" aria-hidden="true" />
@@ -257,11 +307,11 @@ export function MeasuredAttemptPanel({
 				<button
 					type="button"
 					disabled={!isSupported || referencePlaying || active || position.complete}
-					onClick={() => startGuidedAttempt()}
+					onClick={() => void startGuidedAttempt()}
 					className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-primary disabled:opacity-50"
 				>
 					<Headphones className="w-4 h-4" aria-hidden="true" />
-					Escuchar y grabar
+					{guidedStarting ? "Cargando piano…" : "Escuchar y grabar"}
 				</button>
 				<button
 					type="button"
@@ -270,7 +320,7 @@ export function MeasuredAttemptPanel({
 					position.complete ||
 					(!active && (!isSupported || referencePlaying))
 				}
-					onClick={active ? cancel : () => startAttempt()}
+					onClick={active ? cancelEverything : () => startAttempt()}
 					className={`inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-medium disabled:opacity-50 ${
 						active
 							? "border border-rose/40 bg-rose/10 text-rose"
@@ -299,13 +349,16 @@ export function MeasuredAttemptPanel({
 			{errorMessage && <p className="mt-4 text-sm text-rose">{errorMessage}</p>}
 
 			<div className="mt-5 rounded-xl border border-border bg-surface/60 min-h-40 flex items-center justify-center p-5">
-				{status === "idle" && (
+				{status === "idle" && !guidedStarting && (
 					<div className="text-center">
 						<Headphones className="w-7 h-7 text-text-subtle mx-auto" aria-hidden="true" />
 						<p className="text-sm text-text-muted mt-2">
-							Usá auriculares y dejá silencio durante la calibración.
+							Usá auriculares. La app espera hasta 3,5 segundos a que empieces a cantar.
 						</p>
 					</div>
+				)}
+				{guidedStarting && (
+					<p className="text-sm text-text-muted">Reproduciendo la referencia completa…</p>
 				)}
 				{status === "requesting" && (
 					<p className="text-sm text-text-muted">Solicitando el micrófono…</p>
@@ -314,7 +367,7 @@ export function MeasuredAttemptPanel({
 					<div className="text-center">
 						<BarChart3 className="w-7 h-7 text-sky mx-auto animate-pulse" aria-hidden="true" />
 						<p className="text-sm font-semibold text-text mt-2">Calibrando el ambiente</p>
-						<p className="text-xs text-text-muted mt-1">Mantené silencio.</p>
+						<p className="text-xs text-text-muted mt-1">Mantené silencio un instante.</p>
 					</div>
 				)}
 				{status === "countdown" && (
@@ -326,7 +379,7 @@ export function MeasuredAttemptPanel({
 				{status === "recording" && (
 					<div className="w-full text-center">
 						<p className="text-xs uppercase tracking-wider text-rose font-semibold">
-							Grabando métricas
+							{hasVoiceStarted ? "Capturando tu voz" : "Micrófono listo"}
 						</p>
 						{reading ? (
 							<>
@@ -340,7 +393,9 @@ export function MeasuredAttemptPanel({
 							</>
 						) : (
 							<p className="text-sm text-text-muted mt-4">
-								Esperando una nota confiable…
+								{hasVoiceStarted
+									? "Seguimos grabando aunque haya un pequeño corte."
+									: "Empezá a cantar cuando estés cómodo; el tiempo todavía no corre."}
 							</p>
 						)}
 						<div className="mt-5 h-2 bg-canvas rounded-full overflow-hidden border border-border">
