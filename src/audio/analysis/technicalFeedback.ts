@@ -24,16 +24,38 @@ export function buildTechnicalFeedback(
 	metrics: PitchAttemptMetrics,
 ): TechnicalFeedback {
 	if (!metrics.evaluable) {
+		const voicePercent = Math.round((metrics.voiceActivityRatio ?? 0) * 100);
+		const pitchPercent = Math.round((metrics.pitchFrameRatio ?? metrics.voicedFrameRatio) * 100);
+
+		if (metrics.reason === "pitch-unavailable") {
+			return {
+				focus: "capture",
+				observation: "Escuché tu voz, pero no pude fijar una nota estable.",
+				evidence: `Hubo actividad vocal en ${voicePercent}% del intento, pero pitch confiable en ${pitchPercent}%.`,
+				action:
+					"Repetí con una vocal clara como ‘a’ o ‘mum’, a volumen medio y sin vibrato durante el primer segundo.",
+				nextTarget: "Conseguir varios frames consecutivos con altura estable.",
+			};
+		}
+
+		if (metrics.reason === "not-enough-voice") {
+			return {
+				focus: "capture",
+				observation: "La señal vocal llegó demasiado baja o demasiado breve.",
+				evidence: `El micrófono detectó actividad vocal en ${voicePercent}% del intento.`,
+				action:
+					"Acercate un poco al micrófono y cantá a volumen conversacional; no hace falta que el ambiente quede totalmente en silencio.",
+				nextTarget: "Mantener una señal vocal continua durante al menos la mitad del intento.",
+			};
+		}
+
 		return {
 			focus: "capture",
-			observation: "No pude medir el intento con suficiente confianza.",
-			evidence:
-				metrics.reason === "not-enough-voice"
-					? `Solo hubo voz confiable en ${Math.round(metrics.voicedFrameRatio * 100)}% del intento.`
-					: `La confianza global fue de ${Math.round(metrics.measurementConfidence * 100)}%.`,
+			observation: "La voz fue detectada, pero la medición quedó inestable.",
+			evidence: `La confianza global fue de ${Math.round(metrics.measurementConfidence * 100)}% y el pitch apareció en ${pitchPercent}% de la señal vocal.`,
 			action:
-				"Acercate un poco al micrófono, reducí el ruido y usá auriculares antes de repetir.",
-			nextTarget: "Conseguir una captura evaluable antes de corregir la técnica.",
+				"Repetí con volumen medio, una vocal simple y el teléfono o micrófono a distancia constante.",
+			nextTarget: "Superar 45% de confianza global sin cambiar el volumen durante la nota.",
 		};
 	}
 
