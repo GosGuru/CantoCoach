@@ -1,8 +1,8 @@
 # CantoCoach
 
-CantoCoach es un entrenador vocal web local-first. La aplicación actual organiza rutinas, reproduce referencias, registra sesiones y adapta el trabajo según el perfil y el reporte del usuario.
+CantoCoach es un entrenador vocal web local-first. La aplicación organiza rutinas, reproduce referencias, registra sesiones y ya incluye un primer flujo de intentos vocales medidos.
 
-El objetivo del MVP técnico es evolucionar ese flujo hacia:
+El núcleo del producto es:
 
 > escuchar referencia → cantar → medir → corregir → repetir → adaptar.
 
@@ -11,6 +11,21 @@ El objetivo del MVP técnico es evolucionar ese flujo hacia:
 La aplicación se encuentra en desarrollo activo. La especificación que gobierna la evolución está en [`docs/sdd/README.md`](docs/sdd/README.md).
 
 La primera modalidad soportada está optimizada para barítono. El producto no realiza diagnósticos médicos ni sustituye a un profesor, foniatra u otorrinolaringólogo.
+
+## Funcionalidad disponible en la rama SDD
+
+- Chequeo diario de seguridad vocal.
+- Bloqueo ante señales críticas.
+- Referencias con BPM configurable.
+- Patrones diferenciados de staccato, legato, sostenido, slide y sirena.
+- Micrófono local con detector YIN monofónico.
+- Selección de una nota objetivo.
+- Calibración breve de ruido ambiente.
+- Cuenta regresiva y captura de un intento completo.
+- Medición de ataque, afinación central, estabilidad y deriva final.
+- Una corrección técnica prioritaria.
+- Reintento con comparación contra el intento anterior.
+- Persistencia local de métricas sin guardar el audio.
 
 ## Stack
 
@@ -38,18 +53,22 @@ npm run dev
 
 ```bash
 npm run lint
+npm run test
 npm run typecheck
 npm run build
 ```
+
+La batería actual contiene pruebas de seguridad, fechas locales, conversión de pitch, detección YIN, análisis técnico y comparación de reintentos.
 
 ## Estructura actual
 
 ```text
 src/
-  components/       interfaz existente
+  audio/            detección, análisis y síntesis
+  components/       interfaz
   data/             ejercicios y base de conocimiento
-  domain/           reglas puras de seguridad y progreso
-  hooks/            estado y audio
+  domain/           reglas puras de seguridad, progreso y comparación
+  hooks/            estado, captura y sesiones
   services/         generación de rutina y feedback
   types/            contratos centrales
   utils/            fechas y utilidades compartidas
@@ -70,16 +89,16 @@ services/           servicios opcionales, como notificaciones
 
 ## Roadmap resumido
 
-1. Saneamiento, seguridad, fechas y progreso.
-2. Motor de audio correcto.
-3. Micrófono y detección monofónica de pitch.
-4. Métricas de ataque, afinación, estabilidad y final.
-5. Línea base y plan adaptativo de ocho semanas.
-6. Transferencia a repertorio y reevaluación.
+1. Terminar el modelo de sesiones e intentos.
+2. Añadir series, repeticiones, descansos y call-and-response automático.
+3. Mover el análisis a AudioWorklet o Worker.
+4. Construir la evaluación de línea base.
+5. Crear el plan adaptativo de ocho semanas.
+6. Transferir las métricas a repertorio y reevaluación.
 
 ## Privacidad
 
-El MVP se diseña para procesar audio en el dispositivo. Guardar grabaciones será opcional; las métricas podrán persistirse sin conservar el audio completo.
+El audio se procesa en el dispositivo. Los intentos guardan una trayectoria reducida y métricas; no conservan la grabación completa por defecto.
 
 ## Inspiración pedagógica
 
