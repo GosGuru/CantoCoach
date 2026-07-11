@@ -1,11 +1,5 @@
-/**
- * Tipos centrales del historial y progreso de VocalGym.
- * Estos tipos definen el contrato entre el agente coach, la UI y los datos de sesión.
- */
-
 import type { VoiceBlock } from "./vocal";
 
-/** Tipos de voz soportados por VocalGym. */
 export type VoiceType =
 	| "baritone"
 	| "tenor"
@@ -14,24 +8,20 @@ export type VoiceType =
 	| "mezzo"
 	| "soprano";
 
-/** Perfil vocal simplificado del usuario. */
 export interface VocalProfile {
 	voiceType?: VoiceType;
 	level: "beginner" | "intermediate" | "advanced";
-	/** Bloques en los que el usuario quiere enfocarse. */
 	goals: VoiceBlock[];
 }
 
-/** Rutina del día generada por el agente. */
 export interface DailyRoutine {
 	date: string;
-	exercises: string[]; // IDs de ejercicios
+	exercises: string[];
 	totalMinutes: number;
 	focus: string;
 	adaptationReason?: string;
 }
 
-/** Datos que el usuario envía en el reporte diario. */
 export interface DailyReportInput {
 	date: string;
 	constriction: 0 | 1 | 2 | 3;
@@ -41,7 +31,6 @@ export interface DailyReportInput {
 	notes?: string;
 }
 
-/** Feedback generado por el agente coach a partir del reporte diario. */
 export interface CoachFeedback {
 	summary: string;
 	primaryIssue:
@@ -53,16 +42,17 @@ export interface CoachFeedback {
 	recommendation: string;
 	nextRoutine: DailyRoutine;
 	closingPhrase: string;
-	/** Explicación por bloque de por qué se eligió cada sección. */
 	blocks?: string[];
 }
 
-/** Registro de una sesión completada y persistida. */
 export interface SessionRecord {
 	id: string;
 	date: string;
 	routine: DailyRoutine;
+	/** Todos los ejercicios registrados para adherencia, incluidos los manuales. */
 	completedExerciseIds: string[];
+	/** Solo ejercicios con una finalización medida que pasó los gates técnicos. */
+	progressionEligibleExerciseIds?: string[];
 	report: DailyReportInput;
 	feedback: CoachFeedback;
 	totalMinutes: number;
