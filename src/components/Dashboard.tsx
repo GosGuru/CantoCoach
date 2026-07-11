@@ -21,6 +21,7 @@ import {
 	DEFAULT_PROFILE,
 	generateRoutine,
 } from "../services/coachAgent";
+import type { ExerciseCompletionRecord } from "../types/attempt.ts";
 import type { Exercise as VocalExercise } from "../types/vocal";
 import type {
 	CoachFeedback,
@@ -29,6 +30,7 @@ import type {
 	SessionRecord,
 	VocalProfile,
 } from "../types/vocalgym";
+import { getLocalDateKey } from "../utils/localDate.ts";
 import { DailyReportForm } from "./DailyReportForm";
 import { FocusPlayer } from "./FocusPlayer";
 import { KnowledgeSearch } from "./KnowledgeSearch";
@@ -64,6 +66,19 @@ function MetricCard({
 	);
 }
 
+function manualCompletion(exerciseId: string): ExerciseCompletionRecord {
+	return {
+		id: crypto.randomUUID(),
+		version: 1,
+		exerciseId,
+		localDate: getLocalDateKey(),
+		createdAt: new Date().toISOString(),
+		mode: "manual-unscored",
+		attemptIds: [],
+		progressionEligible: false,
+	};
+}
+
 export function Dashboard() {
 	const [profile, setProfile] = useLocalStorage<VocalProfile | null>(
 		"vocalgym-profile",
@@ -77,6 +92,9 @@ export function Dashboard() {
 		"vocalgym-completed",
 		[],
 	);
+	const [completionRecords, setCompletionRecords] = useLocalStorage<
+		ExerciseCompletionRecord[]
+	>("vocalgym-completions-v2", []);
 	const [sessions, setSessions] = useLocalStorage<SessionRecord[]>(
 		"vocalgym-sessions",
 		[],
@@ -95,6 +113,16 @@ export function Dashboard() {
 		[routine],
 	);
 
+	const latestCompletionByExercise = useMemo(() => {
+		const latest = new Map<string, ExerciseCompletionRecord>();
+		for (const record of [...completionRecords].sort((left, right) =>
+			left.createdAt.localeCompare(right.createdAt),
+		)) {
+			latest.set(record.exerciseId, record);
+		}
+		return latest;
+	}, [completionRecords]);
+
 	const completionRate = useMemo(() => {
 		if (routineExercises.length === 0) return 0;
 		const completed = routineExercises.filter((exercise) =>
@@ -106,7 +134,11 @@ export function Dashboard() {
 	const streak = useMemo(() => calculateCurrentStreak(sessions), [sessions]);
 	const weeklyMinutes = useMemo(() => calculateWeeklyMinutes(sessions), [sessions]);
 
-	const handleComplete = (exercise: VocalExercise) => {
+	const handleComplete = (
+		exercise: VocalExercise,
+		completion: ExerciseCompletionRecord,
+	) => {
+		setCompletionRecords((previous) => [...previous, completion]);
 		if (!completedIds.includes(exercise.id)) {
 			setCompletedIds((previous) => [...previous, exercise.id]);
 		}
@@ -115,48 +147,79 @@ export function Dashboard() {
 
 	const handleToggleComplete = (exerciseId: string) => {
 		if (!vocalExerciseById(exerciseId)) return;
-		setCompletedIds((previous) =>
-			previous.includes(exerciseId)
-				? previous.filter((id) => id !== exerciseId)
-				: [...previous, exerciseId],
-		);
+		const isCompleted = completedIds.includes(exerciseId);
+		if (isCompleted) {
+			setCompletedIds((previous) => previous.filter((id) => id !== exerciseId));
+			setCompletionRecords((previous) =>
+				previous.filter((record) => record.exerciseId !== exerciseId),
+			);
+			return;
+		}
+
+		setCompletedIds((previous) => [...previous, exerciseId]);
+		setCompletionRecords((previous) => [
+			...previous,
+			manualCompletion(exerciseId),
+		]);
+	};
+
+	const clearRoutineCompletion = () => {
+		setCompletedIds([]);
+		setCompletionRecords([]);
 	};
 
 	const handleProfileSubmit = (newProfile: VocalProfile) => {
 		setProfile(newProfile);
 		setRoutine(generateRoutine(newProfile, "balanced", 30, sessions));
-		setCompletedIds([]);
+		clearRoutineCompletion();
 	};
 
 	const handleEditProfile = () => {
 		setProfile(null);
-		setCompletedIds([]);
+		clearRoutineCompletion();
 	};
 
 	const handleReportSubmit = (report: DailyReportInput) => {
 		const activeProfile = profile ?? DEFAULT_PROFILE;
-		const result = analyzeDailyReport(report, activeProfile, sessions);
-		const totalMinutes = completedIds.reduce((sum, id) => {
-			return sum + (vocalExerciseById(id)?.durationMinutes ?? 0);
-		}, 0);
-
-		const newSession: SessionRecord = {
+		const progressionEligibleExerciseIds = completedIds.filter(
+			(exerciseId) =>
+				latestCompletionByExercise.get(exerciseId)?.progressionEligible === true,
+		);
+		const totalMinutes = completedIds.reduce(
+			(sum, id) => sum + (vocalExerciseById(id)?.durationMinutes ?? 0),
+			0,
+		);
+		const preliminaryFeedback = analyzeDailyReport(
+			report,
+			activeProfile,
+			sessions,
+		);
+		const baseSession: SessionRecord = {
 			id: crypto.randomUUID(),
 			date: report.date,
 			routine,
 			completedExerciseIds: [...completedIds],
+			progressionEligibleExerciseIds,
 			report,
-			feedback: result,
+			feedback: preliminaryFeedback,
 			totalMinutes,
 		};
+		const otherDays = sessions.filter((session) => session.date !== report.date);
+		const sessionsWithCurrentEvidence = [...otherDays, baseSession];
+		const result = analyzeDailyReport(
+			report,
+			activeProfile,
+			sessionsWithCurrentEvidence,
+		);
+		const finalSession: SessionRecord = {
+			...baseSession,
+			feedback: result,
+		};
 
-		setSessions((previous) => {
-			const otherDays = previous.filter((session) => session.date !== report.date);
-			return [...otherDays, newSession];
-		});
+		setSessions([...otherDays, finalSession]);
 		setFeedback(result);
 		setRoutine(result.nextRoutine);
-		setCompletedIds([]);
+		clearRoutineCompletion();
 	};
 
 	return (
@@ -224,8 +287,7 @@ export function Dashboard() {
 								: "text-text-muted hover:text-text"
 						}`}
 					>
-						<Calendar className="w-4 h-4" aria-hidden="true" />
-						Rutina
+						<Calendar className="w-4 h-4" aria-hidden="true" /> Rutina
 					</button>
 					<button
 						type="button"
@@ -236,8 +298,7 @@ export function Dashboard() {
 								: "text-text-muted hover:text-text"
 						}`}
 					>
-						<TrendingUp className="w-4 h-4" aria-hidden="true" />
-						Progreso
+						<TrendingUp className="w-4 h-4" aria-hidden="true" /> Progreso
 					</button>
 				</nav>
 
@@ -249,7 +310,12 @@ export function Dashboard() {
 							<MetricCard
 								icon={Calendar}
 								label="Hoy"
-								value={<>{routine.totalMinutes} <span className="text-base text-text-muted">min</span></>}
+								value={
+									<>
+										{routine.totalMinutes}{" "}
+										<span className="text-base text-text-muted">min</span>
+									</>
+								}
 								accent="text-accent"
 							/>
 							<MetricCard
@@ -293,32 +359,38 @@ export function Dashboard() {
 								<button
 									type="button"
 									onClick={() => {
-										setCompletedIds([]);
+										clearRoutineCompletion();
 										setRoutine(generateRoutine(profile, "balanced", 30, sessions));
 									}}
 									className="shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-surface text-text-muted text-sm font-medium border border-border hover:text-text"
 								>
-									<RotateCcw className="w-4 h-4" aria-hidden="true" />
-									Restablecer
+									<RotateCcw className="w-4 h-4" aria-hidden="true" /> Restablecer
 								</button>
 							</div>
 
 							<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-								{routineExercises.map((exercise) => (
-									<RoutineCard
-										key={exercise.id}
-										exercise={exercise}
-										onStart={setActiveExercise}
-										onToggleComplete={handleToggleComplete}
-										isCompleted={completedIds.includes(exercise.id)}
-									/>
-								))}
+								{routineExercises.map((exercise) => {
+									const completion = latestCompletionByExercise.get(exercise.id);
+									return (
+										<RoutineCard
+											key={exercise.id}
+											exercise={exercise}
+											onStart={setActiveExercise}
+											onToggleComplete={handleToggleComplete}
+											isCompleted={completedIds.includes(exercise.id)}
+											completionMode={completion?.mode}
+											progressionEligible={completion?.progressionEligible}
+										/>
+									);
+								})}
 							</div>
 
 							{routineExercises.length === 0 && (
 								<div className="text-center py-10">
 									<Award className="w-7 h-7 text-text-subtle mx-auto mb-3" aria-hidden="true" />
-									<p className="text-sm text-text-muted">No hay ejercicios vocales asignados.</p>
+									<p className="text-sm text-text-muted">
+										No hay ejercicios vocales asignados.
+									</p>
 								</div>
 							)}
 						</section>
@@ -331,11 +403,15 @@ export function Dashboard() {
 						{feedback && (
 							<section className="glass-panel rounded-xl p-5 sm:p-6 border-l-4 border-accent">
 								<h2 className="section-title mb-2">Feedback del coach</h2>
-								<p className="text-sm text-text-muted leading-relaxed">{feedback.summary}</p>
+								<p className="text-sm text-text-muted leading-relaxed">
+									{feedback.summary}
+								</p>
 								<p className="text-sm text-text mt-3 font-medium p-3 rounded-lg bg-surface/60 border border-border">
 									{feedback.recommendation}
 								</p>
-								<p className="text-sm text-accent mt-4 italic">{feedback.closingPhrase}</p>
+								<p className="text-sm text-accent mt-4 italic">
+									{feedback.closingPhrase}
+								</p>
 							</section>
 						)}
 					</>

@@ -4,7 +4,7 @@
 
 La PR #1 incorporó la base SDD, seguridad vocal, fechas locales, progreso derivado, motor de audio, detector YIN y afinador en vivo.
 
-## En la segunda entrega
+## PR #3 — Intento medido
 
 - selección de nota objetivo;
 - calibración breve del ruido ambiente;
@@ -19,16 +19,32 @@ La PR #1 incorporó la base SDD, seguridad vocal, fechas locales, progreso deriv
 - feedback con un único foco;
 - persistencia local;
 - reintento comparado;
-- contratos de `ExerciseAttempt` y `PracticeSession`;
-- 17 pruebas del núcleo.
+- contratos iniciales de `ExerciseAttempt` y `PracticeSession`;
+- 17 pruebas del núcleo;
+- lint, typecheck y build validados en CI.
+
+## PR #4 — Sesiones prescritas y progresión
+
+- `PracticeSession` versionada y enlazada a cada intento;
+- series, repeticiones, duración y descansos derivados por bloque;
+- solo los intentos evaluables avanzan la prescripción;
+- call-and-response por repetición con `Escuchar y grabar`;
+- cierre parcial, interrupción, finalización manual y finalización medida;
+- dashboard con estados `Manual`, `Medido` y `Habilita progresión`;
+- gates por afinación, estabilidad, ataque, confianza, cobertura y clipping;
+- evidencia de progresión separada de la adherencia;
+- práctica manual incapaz de desbloquear ejercicios;
+- cada nivel superior requiere evidencia medida del nivel anterior en su bloque;
+- 30 pruebas del núcleo.
 
 ## Pendiente
 
-- comprobar lint, typecheck y build completos en CI;
-- enlazar atómicamente `PracticeSession` con los intentos;
-- diferenciar completado manual de evidencia técnica en el generador;
-- series, repeticiones y descansos;
-- call-and-response automático;
+- prueba manual de call-and-response con micrófono real;
+- Chrome de escritorio;
+- Safari iPhone;
+- migración explícita de sesiones históricas de versión 1;
+- descanso automático entre repeticiones y series completas sin interacción;
 - AudioWorklet o Worker;
-- línea base y plan de ocho semanas;
-- Safari iPhone y Chrome con micrófono real.
+- línea base y rango cómodo;
+- plan adaptativo de ocho semanas;
+- repertorio y reevaluación.
