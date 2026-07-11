@@ -19,7 +19,7 @@ export interface CaptureQuality {
 export interface ExerciseAttemptRecord {
 	id: string;
 	version: 1;
-	practiceSessionId: string;
+	practiceSessionId?: string;
 	exerciseId: string;
 	localDate: string;
 	createdAt: string;
