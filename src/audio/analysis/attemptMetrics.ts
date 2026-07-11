@@ -9,15 +9,18 @@ export interface PitchObservation {
 	frequencyHz: number | null;
 	confidence: number;
 	rms: number;
+	voiceActive?: boolean;
 }
 
 export type OnsetDirection = "below" | "above" | "direct";
 
 export interface PitchAttemptMetrics {
 	evaluable: boolean;
-	reason?: "not-enough-voice" | "low-confidence";
+	reason?: "not-enough-voice" | "pitch-unavailable" | "low-confidence";
 	measurementConfidence: number;
 	voicedFrameRatio: number;
+	voiceActivityRatio?: number;
+	pitchFrameRatio?: number;
 	initialErrorCents: number | null;
 	onsetDirection: OnsetDirection | null;
 	stabilizationTimeMs: number | null;
@@ -26,7 +29,7 @@ export interface PitchAttemptMetrics {
 	phraseEndDriftCents: number | null;
 }
 
-const MIN_FRAME_CONFIDENCE = 0.7;
+const MIN_FRAME_CONFIDENCE = 0.55;
 const TARGET_TOLERANCE_CENTS = 25;
 const STABLE_FRAME_COUNT = 3;
 
@@ -41,25 +44,38 @@ function average(values: number[]): number {
 	return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function emptyMetrics(
+	reason: PitchAttemptMetrics["reason"],
+	overrides: Partial<PitchAttemptMetrics> = {},
+): PitchAttemptMetrics {
+	return {
+		evaluable: false,
+		reason,
+		measurementConfidence: 0,
+		voicedFrameRatio: 0,
+		voiceActivityRatio: 0,
+		pitchFrameRatio: 0,
+		initialErrorCents: null,
+		onsetDirection: null,
+		stabilizationTimeMs: null,
+		medianAbsolutePitchErrorCents: null,
+		pitchStabilityMadCents: null,
+		phraseEndDriftCents: null,
+		...overrides,
+	};
+}
+
 export function analyzePitchAttempt(
 	observations: PitchObservation[],
 	targetFrequencyHz: number,
 ): PitchAttemptMetrics {
-	if (observations.length === 0) {
-		return {
-			evaluable: false,
-			reason: "not-enough-voice",
-			measurementConfidence: 0,
-			voicedFrameRatio: 0,
-			initialErrorCents: null,
-			onsetDirection: null,
-			stabilizationTimeMs: null,
-			medianAbsolutePitchErrorCents: null,
-			pitchStabilityMadCents: null,
-			phraseEndDriftCents: null,
-		};
-	}
+	if (observations.length === 0) return emptyMetrics("not-enough-voice");
 
+	const activeFrames = observations.filter(
+		(observation) =>
+			observation.voiceActive ??
+			(observation.frequencyHz !== null && observation.frequencyHz > 0),
+	);
 	const voiced = observations
 		.map((observation, index) => ({ observation, index }))
 		.filter(
@@ -75,38 +91,50 @@ export function analyzePitchAttempt(
 			cents: centsBetween(observation.frequencyHz as number, targetFrequencyHz),
 		}));
 
+	const voiceActivityRatio = activeFrames.length / observations.length;
 	const voicedFrameRatio = voiced.length / observations.length;
+	const pitchFrameRatio =
+		activeFrames.length === 0 ? 0 : voiced.length / activeFrames.length;
 	const confidenceAverage = average(voiced.map((frame) => frame.confidence));
-	const measurementConfidence = confidenceAverage * voicedFrameRatio;
+	const measurementConfidence =
+		confidenceAverage * Math.min(1, pitchFrameRatio / 0.65);
+	const firstVoiced = voiced[0];
 
-	if (voiced.length < 5 || voicedFrameRatio < 0.35) {
-		return {
-			evaluable: false,
-			reason: "not-enough-voice",
+	if (activeFrames.length < 5 || voiceActivityRatio < 0.22) {
+		return emptyMetrics("not-enough-voice", {
 			measurementConfidence,
 			voicedFrameRatio,
-			initialErrorCents: voiced[0]?.cents ?? null,
-			onsetDirection: voiced[0] ? directionFromCents(voiced[0].cents) : null,
-			stabilizationTimeMs: null,
-			medianAbsolutePitchErrorCents: null,
-			pitchStabilityMadCents: null,
-			phraseEndDriftCents: null,
-		};
+			voiceActivityRatio,
+			pitchFrameRatio,
+			initialErrorCents: firstVoiced?.cents ?? null,
+			onsetDirection: firstVoiced
+				? directionFromCents(firstVoiced.cents)
+				: null,
+		});
 	}
 
-	if (measurementConfidence < 0.45) {
-		return {
-			evaluable: false,
-			reason: "low-confidence",
+	if (voiced.length < 5 || pitchFrameRatio < 0.22) {
+		return emptyMetrics("pitch-unavailable", {
 			measurementConfidence,
 			voicedFrameRatio,
-			initialErrorCents: voiced[0].cents,
-			onsetDirection: directionFromCents(voiced[0].cents),
-			stabilizationTimeMs: null,
-			medianAbsolutePitchErrorCents: null,
-			pitchStabilityMadCents: null,
-			phraseEndDriftCents: null,
-		};
+			voiceActivityRatio,
+			pitchFrameRatio,
+			initialErrorCents: firstVoiced?.cents ?? null,
+			onsetDirection: firstVoiced
+				? directionFromCents(firstVoiced.cents)
+				: null,
+		});
+	}
+
+	if (measurementConfidence < 0.38) {
+		return emptyMetrics("low-confidence", {
+			measurementConfidence,
+			voicedFrameRatio,
+			voiceActivityRatio,
+			pitchFrameRatio,
+			initialErrorCents: firstVoiced.cents,
+			onsetDirection: directionFromCents(firstVoiced.cents),
+		});
 	}
 
 	let stableStart = -1;
@@ -132,6 +160,8 @@ export function analyzePitchAttempt(
 		evaluable: true,
 		measurementConfidence,
 		voicedFrameRatio,
+		voiceActivityRatio,
+		pitchFrameRatio,
 		initialErrorCents: voiced[0].cents,
 		onsetDirection: directionFromCents(voiced[0].cents),
 		stabilizationTimeMs,
