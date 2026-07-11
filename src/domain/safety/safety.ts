@@ -1,4 +1,4 @@
-import { getLocalDateKey } from "../../utils/localDate";
+import { getLocalDateKey } from "../../utils/localDate.ts";
 
 export type SafetyState = "safe" | "caution" | "blocked";
 
