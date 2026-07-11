@@ -10,9 +10,10 @@ import {
 	Play,
 	Square,
 } from "lucide-react";
-import type { Exercise, VoiceBlock } from "../types/vocal";
 import { useVocalSynthesizer } from "../hooks/useVocalSynthesizer";
-import { LivePitchPanel } from "./LivePitchPanel";
+import type { AttemptTarget } from "../types/attempt.ts";
+import type { Exercise, VoiceBlock } from "../types/vocal";
+import { MeasuredAttemptPanel } from "./MeasuredAttemptPanel";
 
 interface FocusPlayerProps {
 	exercise: Exercise;
@@ -89,6 +90,16 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 		} else {
 			startScale(exercise.scalePattern);
 		}
+	};
+
+	const handlePlayTarget = (target: AttemptTarget) => {
+		stop();
+		startScale({
+			type: "sustained",
+			defaultBpm: 60,
+			frequencies: [target.frequencyHz],
+			noteNames: [target.noteName],
+		});
 	};
 
 	const handleClose = () => {
@@ -179,7 +190,7 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 						<p className="mt-3 text-sm text-text-muted">
 							{currentNoteIndex >= 0
 								? `Nota actual: ${noteNames[currentNoteIndex] ?? currentNoteIndex + 1}`
-								: "Escuchá primero la referencia y después activá el afinador en vivo."}
+								: "Escuchá el patrón completo o elegí una nota para realizar un intento medido."}
 						</p>
 					</section>
 
@@ -221,7 +232,11 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 						</p>
 					</section>
 
-					<LivePitchPanel referencePlaying={isPlaying} />
+					<MeasuredAttemptPanel
+						exercise={exercise}
+						referencePlaying={isPlaying}
+						onPlayTarget={handlePlayTarget}
+					/>
 
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border">
 						<h2 className="section-title mb-4">Instrucciones</h2>
