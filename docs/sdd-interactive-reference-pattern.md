@@ -99,8 +99,8 @@ Las referencias de una sola nota usadas por el panel de medición se mantienen a
 - Cada botón incluye un nombre accesible con nota y posición.
 - La nota activa usa `aria-current`.
 - La nota seleccionada usa `aria-pressed`.
-- Los estados deshabilitados impiden saltos mientras se carga una muestra.
 - El foco de teclado conserva un indicador visible.
+- Los controles de reproducción deshabilitados comunican su estado visualmente.
 
 ## 8. Criterios de aceptación
 
