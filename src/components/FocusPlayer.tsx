@@ -27,7 +27,7 @@ import type {
 	ExerciseCompletionMode,
 	ExerciseCompletionRecord,
 } from "../types/attempt.ts";
-import type { Exercise, VoiceBlock } from "../types/vocal";
+import type { Exercise, ScalePattern, VoiceBlock } from "../types/vocal";
 import { getLocalDateKey } from "../utils/localDate.ts";
 import { ExerciseLearningPanel } from "./ExerciseLearningPanel.tsx";
 import { MeasuredAttemptPanel } from "./MeasuredAttemptPanel";
@@ -75,6 +75,14 @@ function deduplicateAttempts(
 	return [...new Map(attempts.map((attempt) => [attempt.id, attempt])).values()];
 }
 
+function patternFromIndex(pattern: ScalePattern, startIndex: number): ScalePattern {
+	return {
+		...pattern,
+		frequencies: pattern.frequencies.slice(startIndex),
+		noteNames: pattern.noteNames?.slice(startIndex),
+	};
+}
+
 export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps) {
 	const prescription = useMemo(
 		() => resolveExercisePrescription(exercise),
@@ -108,9 +116,15 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	const [sessionAttempts, setSessionAttempts] = useState<ExerciseAttemptRecord[]>(
 		[],
 	);
+	const [selectedStartIndex, setSelectedStartIndex] = useState(0);
+	const [playbackStartIndex, setPlaybackStartIndex] = useState(0);
 
 	const noteNames = exercise.scalePattern.noteNames ?? [];
 	const totalNotes = exercise.scalePattern.frequencies.length;
+	const displayCurrentNoteIndex =
+		playbackStartIndex >= 0 && currentNoteIndex >= 0
+			? playbackStartIndex + currentNoteIndex
+			: -1;
 	const completedRepetitions =
 		session?.completedRepetitions ??
 		sessionAttempts.filter((attempt) => attempt.metrics.evaluable).length;
@@ -127,8 +141,8 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	);
 
 	const focusInstruction =
-		currentNoteIndex >= 0
-			? currentNoteIndex % Math.max(exercise.instructions.length, 1)
+		displayCurrentNoteIndex >= 0
+			? displayCurrentNoteIndex % Math.max(exercise.instructions.length, 1)
 			: 0;
 
 	const tempoOptions = useMemo(() => {
@@ -141,9 +155,12 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	}, [exercise.scalePattern.defaultBpm]);
 
 	const progressPercent = useMemo(() => {
-		if (totalNotes === 0 || currentNoteIndex < 0) return 0;
-		return ((currentNoteIndex + 1) / totalNotes) * 100;
-	}, [currentNoteIndex, totalNotes]);
+		if (totalNotes === 0 || displayCurrentNoteIndex < 0) return 0;
+		return ((displayCurrentNoteIndex + 1) / totalNotes) * 100;
+	}, [displayCurrentNoteIndex, totalNotes]);
+
+	const selectedStartLabel =
+		noteNames[selectedStartIndex] ?? String(selectedStartIndex + 1);
 
 	const toggleAutocheck = (item: string) => {
 		setCheckedAutochecks((previous) => {
@@ -154,14 +171,28 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 		});
 	};
 
+	const startPatternFrom = (requestedIndex: number) => {
+		if (totalNotes === 0) return;
+		const safeIndex = Math.max(0, Math.min(requestedIndex, totalNotes - 1));
+		setSelectedStartIndex(safeIndex);
+		setPlaybackStartIndex(safeIndex);
+		void startScale(patternFromIndex(exercise.scalePattern, safeIndex));
+	};
+
 	const handlePlayPause = () => {
 		if (isPlaying) pause();
-		else if (currentNoteIndex >= 0) resume();
-		else void startScale(exercise.scalePattern);
+		else if (currentNoteIndex >= 0 && playbackStartIndex >= 0) resume();
+		else startPatternFrom(selectedStartIndex);
+	};
+
+	const handleStopReference = () => {
+		stop();
+		setPlaybackStartIndex(selectedStartIndex);
 	};
 
 	const handlePlayTarget = async (target: AttemptTarget): Promise<void> => {
 		stop();
+		setPlaybackStartIndex(-1);
 		await startScale({
 			type: "sustained",
 			defaultBpm: 58,
@@ -222,6 +253,7 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 	};
 
 	const referenceBusy = isPlaying || isLoading;
+	const referenceCanStop = referenceBusy || currentNoteIndex >= 0;
 	const continuousPattern = ["sirens", "octave-slide"].includes(
 		exercise.scalePattern.type,
 	);
@@ -259,31 +291,45 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 			<main className="relative flex-1 overflow-y-auto p-4 sm:p-6">
 				<div className="max-w-2xl mx-auto space-y-6">
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border shadow-elevated">
-						<div className="flex items-center gap-2 mb-4">
-							<Music className="w-5 h-5 text-accent" aria-hidden="true" />
-							<h2 className="section-title">Referencia sonora</h2>
+						<div className="flex items-start justify-between gap-4 mb-4">
+							<div className="flex items-center gap-2">
+								<Music className="w-5 h-5 text-accent" aria-hidden="true" />
+								<h2 className="section-title">Referencia sonora</h2>
+							</div>
+							<span className="shrink-0 rounded-full border border-accent/35 bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
+								Inicio: {selectedStartLabel}
+							</span>
 						</div>
 
 						<div className="flex items-stretch gap-1.5 h-20 sm:h-24">
 							{exercise.scalePattern.frequencies.map((_, index) => {
-								const active = index === currentNoteIndex;
-								const past = currentNoteIndex >= 0 && index < currentNoteIndex;
+								const active = index === displayCurrentNoteIndex;
+								const selected = index === selectedStartIndex;
+								const past =
+									displayCurrentNoteIndex >= 0 && index < displayCurrentNoteIndex;
+								const noteLabel = noteNames[index] ?? String(index + 1);
 								return (
-									<div
-										key={`${noteNames[index] ?? "note"}-${index}`}
-										className={`flex-1 min-w-0 flex items-center justify-center rounded-lg border text-xs font-medium transition-all duration-150 ${
+									<button
+										type="button"
+										key={`${noteLabel}-${index}`}
+										onClick={() => startPatternFrom(index)}
+										aria-label={`Empezar desde ${noteLabel}, nota ${index + 1} de ${totalNotes}`}
+										aria-current={active ? "step" : undefined}
+										aria-pressed={selected}
+										className={`flex-1 min-w-0 flex items-center justify-center rounded-lg border text-xs font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-canvas ${
 											active
 												? "bg-accent text-accent-foreground border-accent shadow-glow scale-105 z-10"
-												: past
-													? "bg-surface/60 text-text-muted border-border"
-													: "bg-surface text-text-subtle border-border"
+												: selected
+													? "bg-accent/12 text-text border-accent/70 ring-2 ring-accent/20"
+													: past
+														? "bg-surface/60 text-text-muted border-border"
+														: "bg-surface text-text-subtle border-border hover:border-accent/55 hover:text-text"
 										}`}
-										aria-current={active ? "true" : undefined}
 									>
 										<span className="truncate px-1 text-sm sm:text-base font-display">
-											{noteNames[index] ?? index + 1}
+											{noteLabel}
 										</span>
-									</div>
+									</button>
 								);
 							})}
 						</div>
@@ -294,31 +340,53 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 								style={{ width: `${progressPercent}%` }}
 							/>
 						</div>
+						<p className="mt-3 text-xs leading-relaxed text-text-subtle">
+							Tocá cualquier nota para saltar ahí y continuar el patrón desde ese punto.
+						</p>
 					</section>
 
 					<section className="glass-panel rounded-2xl p-5 sm:p-6 border border-border space-y-5">
 						<div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-							<button
-								type="button"
-								disabled={isLoading}
-								onClick={handlePlayPause}
-								className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl btn-primary text-base font-semibold disabled:opacity-60"
-							>
-								{isLoading ? (
-									<>
-										<LoaderCircle className="w-5 h-5 animate-spin" aria-hidden="true" />
-										Cargando piano…
-									</>
-								) : isPlaying ? (
-									<>
-										<Pause className="w-5 h-5" aria-hidden="true" /> Pausar
-									</>
-								) : (
-									<>
-										<Play className="w-5 h-5" aria-hidden="true" /> Escuchar patrón
-									</>
-								)}
-							</button>
+							<div className="flex w-full sm:w-auto gap-2">
+								<button
+									type="button"
+									disabled={isLoading}
+									onClick={handlePlayPause}
+									className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl btn-primary text-base font-semibold disabled:opacity-60"
+								>
+									{isLoading ? (
+										<>
+											<LoaderCircle className="w-5 h-5 animate-spin" aria-hidden="true" />
+											Cargando piano…
+										</>
+									) : isPlaying ? (
+										<>
+											<Pause className="w-5 h-5" aria-hidden="true" /> Pausar
+										</>
+									) : currentNoteIndex >= 0 && playbackStartIndex >= 0 ? (
+										<>
+											<Play className="w-5 h-5" aria-hidden="true" /> Continuar
+										</>
+									) : (
+										<>
+											<Play className="w-5 h-5" aria-hidden="true" />
+											{selectedStartIndex === 0
+												? "Escuchar patrón"
+												: `Desde ${selectedStartLabel}`}
+										</>
+									)}
+								</button>
+								<button
+									type="button"
+									disabled={!referenceCanStop}
+									onClick={handleStopReference}
+									className="inline-flex items-center justify-center gap-2 rounded-xl btn-secondary px-4 py-3.5 disabled:opacity-40"
+									aria-label="Detener referencia sonora"
+								>
+									<Square className="w-5 h-5" aria-hidden="true" />
+									<span className="hidden sm:inline">Detener</span>
+								</button>
+							</div>
 
 							<div className="flex flex-wrap items-center justify-center gap-2">
 								{tempoOptions.map((option) => (
@@ -452,7 +520,7 @@ export function FocusPlayer({ exercise, onClose, onComplete }: FocusPlayerProps)
 				<div className="max-w-2xl mx-auto grid grid-cols-1 sm:grid-cols-4 gap-3">
 					<button
 						type="button"
-						onClick={stop}
+						onClick={handleStopReference}
 						className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl btn-secondary"
 					>
 						<Square className="w-5 h-5" /> Detener audio
